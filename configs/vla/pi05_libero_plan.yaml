@@ -1,0 +1,23 @@
+name: pi05_libero
+
+model:
+  family: pi05
+  model_id: lerobot/pi05_libero_finetuned_v044
+  model_path:
+  dtype: float16
+  max_new_tokens: 0
+
+runtime:
+  backend: lerobot
+  batch_size: 1
+  device: cuda
+
+eval:
+  dataset: pi05_load_only
+  sample_count: 0
+  output_dir: outputs
+
+profile:
+  warmup: 0
+  repeats: 1
+  output_dir: profiling

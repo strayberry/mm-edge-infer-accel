@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mm-edge-infer-accel"
+version = "0.1.0"
+description = "Multimodal edge inference acceleration, benchmarking, and deployment preparation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pyyaml>=6.0",
+  "torch",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+quant = [
+  "transformers>=4.49",
+  "accelerate",
+  "bitsandbytes",
+  "llmcompressor",
+  "qwen-vl-utils[decord]",
+  "datasets",
+]
+vllm = [
+  "vllm",
+  "transformers>=4.49",
+  "datasets",
+]
+dev = [
+  "pytest>=7",
+  "ruff>=0.4",
+]
+report = [
+  "matplotlib>=3.7",
+]
+
+[project.scripts]
+mm-edge-infer-accel = "mm_edge_infer_accel.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["mm_edge_infer_accel*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

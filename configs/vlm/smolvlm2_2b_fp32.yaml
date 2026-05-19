@@ -1,0 +1,28 @@
+name: smolvlm2_2b_fp32
+model:
+  family: smolvlm2
+  model_id: HuggingFaceTB/SmolVLM2-2.2B-Instruct
+  model_path: /root/autodl-tmp/models/SmolVLM2-2.2B-Instruct
+  dtype: float32
+  max_new_tokens: 128
+quant:
+  method: none
+runtime:
+  backend: vllm
+  batch_size: 1
+  device: cuda
+  visual_keep_ratio: 1.0
+  kv_cache_dtype: fp16
+  max_model_len: 2048
+  gpu_memory_utilization: 0.85
+  enforce_eager: true
+  disable_flashinfer_sampler: true
+eval:
+  dataset: ocrbench
+  sample_count: 100
+  sample_strategy: stratified
+  output_dir: outputs
+profile:
+  warmup: 3
+  repeats: 10
+  output_dir: profiling

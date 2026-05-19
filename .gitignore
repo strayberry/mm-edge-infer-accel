@@ -1,0 +1,57 @@
+# Python environments and caches
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Build and packaging outputs
+build/
+dist/
+*.egg-info/
+*.log
+tmp/
+temp/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Local agent and recovery context
+AGENTS.md
+RECOVERED_CONTEXT.md
+.deepseek/
+
+# Local experiment outputs
+outputs/
+profiling/
+datasets/
+configs/archive/
+scripts/archive/
+models/
+checkpoints/
+
+# Model and deployment artifacts
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.engine
+*.onnx
+*.plan
+
+# Profiling artifacts
+*.nsys-rep
+*.sqlite
+*.ncu-rep
+*.qdrep

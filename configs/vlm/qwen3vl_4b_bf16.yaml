@@ -1,0 +1,32 @@
+name: qwen3vl_4b_bf16
+model:
+  family: qwen3-vl
+  model_id: Qwen/Qwen3-VL-4B-Instruct
+  model_path: /root/autodl-tmp/models/Qwen3-VL-4B-Instruct
+  dtype: bfloat16
+  max_new_tokens: 128
+  max_pixels: 602112
+quant:
+  method: none
+runtime:
+  backend: vllm
+  batch_size: 1
+  device: cuda
+  visual_keep_ratio: 1.0
+  kv_cache_dtype: fp16
+  max_model_len: 1024
+  gpu_memory_utilization: 0.85
+  enforce_eager: true
+  disable_flashinfer_sampler: true
+  mm_processor_kwargs:
+    truncation: false
+eval:
+  dataset: ocrbench
+  sample_count: 100
+  sample_strategy: stratified
+  output_dir: outputs
+profile:
+  warmup: 1
+  repeats: 10
+  output_dir: profiling
+  measure_ttft: false
