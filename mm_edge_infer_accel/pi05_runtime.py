@@ -7,6 +7,8 @@ from pathlib import Path
 from statistics import fmean, median
 from typing import Any
 
+from .profiling import nvtx_range
+
 
 def set_pi05_cache_env() -> None:
     os.environ.setdefault("HF_HOME", "/root/autodl-tmp/hf_cache")
@@ -17,6 +19,33 @@ def set_pi05_cache_env() -> None:
 
 def log(message: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def pi05_inference_optimizations() -> dict:
+    import torch
+
+    tf32_enabled = _env_flag("MM_EDGE_PI05_TF32", True)
+    num_inference_steps = os.environ.get("MM_EDGE_PI05_NUM_INFERENCE_STEPS")
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = tf32_enabled
+        torch.backends.cudnn.allow_tf32 = tf32_enabled
+    if tf32_enabled:
+        torch.set_float32_matmul_precision("high")
+
+    return {
+        "tf32": tf32_enabled,
+        "compile_model": _env_flag("MM_EDGE_PI05_COMPILE", False),
+        "compile_mode": os.environ.get("MM_EDGE_PI05_COMPILE_MODE", "reduce-overhead"),
+        "num_inference_steps": int(num_inference_steps) if num_inference_steps else None,
+        "patch_sample_actions": _env_flag("MM_EDGE_PI05_PATCH_SAMPLE_ACTIONS", False),
+    }
 
 
 def cuda_snapshot() -> dict:
@@ -98,27 +127,41 @@ def load_policy_and_processors(model_id: str):
         transition_to_policy_action,
     )
 
-    config = PreTrainedConfig.from_pretrained(model_id, local_files_only=True)
-    config.compile_model = False
-    config.gradient_checkpointing = False
-    config.device = "cuda" if torch.cuda.is_available() else "cpu"
+    optimizations = pi05_inference_optimizations()
+    with nvtx_range("pi05_load_config_processors"):
+        config = PreTrainedConfig.from_pretrained(model_id, local_files_only=True)
+        config.compile_model = optimizations["compile_model"]
+        config.compile_mode = optimizations["compile_mode"]
+        if optimizations["num_inference_steps"] is not None:
+            config.num_inference_steps = optimizations["num_inference_steps"]
+        config.gradient_checkpointing = False
+        config.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    preprocessor = PolicyProcessorPipeline.from_pretrained(
-        pretrained_model_name_or_path=model_id,
-        config_filename="policy_preprocessor.json",
-        local_files_only=True,
-        to_transition=batch_to_transition,
-        to_output=transition_to_batch,
-    )
-    postprocessor = PolicyProcessorPipeline.from_pretrained(
-        pretrained_model_name_or_path=model_id,
-        config_filename="policy_postprocessor.json",
-        local_files_only=True,
-        to_transition=policy_action_to_transition,
-        to_output=transition_to_policy_action,
-    )
+        preprocessor = PolicyProcessorPipeline.from_pretrained(
+            pretrained_model_name_or_path=model_id,
+            config_filename="policy_preprocessor.json",
+            local_files_only=True,
+            to_transition=batch_to_transition,
+            to_output=transition_to_batch,
+        )
+        postprocessor = PolicyProcessorPipeline.from_pretrained(
+            pretrained_model_name_or_path=model_id,
+            config_filename="policy_postprocessor.json",
+            local_files_only=True,
+            to_transition=policy_action_to_transition,
+            to_output=transition_to_policy_action,
+        )
     started = time.perf_counter()
-    policy = PI05Policy.from_pretrained(model_id, config=config, local_files_only=True).eval()
+    with nvtx_range("pi05_load_policy"):
+        policy = PI05Policy.from_pretrained(model_id, config=config, local_files_only=True).eval()
+    if optimizations["patch_sample_actions"]:
+        from .pi05_optimizations import apply_pi05_optimizations
+
+        patch_result = apply_pi05_optimizations(
+            policy, enabled=optimizations["patch_sample_actions"]
+        )
+        optimizations["patch_result"] = patch_result.as_dict()
+    config.mm_edge_inference_optimizations = optimizations
     return policy, preprocessor, postprocessor, config, time.perf_counter() - started
 
 
@@ -193,11 +236,18 @@ def _warmup_policy(policy, preprocessor, dataset, mode: str, warmup: int, device
         return
     warmup_count = min(warmup, len(dataset))
     log(f"running warmup: {warmup_count} frames, mode={mode}")
-    for idx in range(warmup_count):
-        batch = preprocessor(_raw_batch_from_libero_item(dataset[idx]))
-        if mode == "reset":
-            policy.reset()
-        _ = policy.select_action(batch)
+    with nvtx_range("pi05_warmup"):
+        import torch
+
+        for idx in range(warmup_count):
+            with nvtx_range("pi05_warmup_preprocess"):
+                batch = preprocessor(_raw_batch_from_libero_item(dataset[idx]))
+            if mode == "reset":
+                with nvtx_range("pi05_warmup_reset"):
+                    policy.reset()
+            with nvtx_range("pi05_warmup_select_action"):
+                with torch.inference_mode():
+                    _ = policy.select_action(batch)
     if device == "cuda":
         import torch
 
@@ -219,7 +269,8 @@ def run_libero_action_inference(
 
     log(f"loading dataset {dataset_id} episode={episode}")
     dataset_started = time.perf_counter()
-    dataset = LeRobotDataset(repo_id=dataset_id, episodes=[episode])
+    with nvtx_range("pi05_load_dataset"):
+        dataset = LeRobotDataset(repo_id=dataset_id, episodes=[episode])
     dataset_seconds = time.perf_counter() - dataset_started
     log(f"dataset ready: len={len(dataset)}")
 
@@ -232,14 +283,17 @@ def run_libero_action_inference(
     actual_sample_count = min(sample_count, len(dataset))
     total_started = time.perf_counter()
     for idx in range(actual_sample_count):
-        raw = dataset[idx]
+        with nvtx_range("pi05_dataset_getitem"):
+            raw = dataset[idx]
         preprocess_started = time.perf_counter()
-        batch = preprocessor(_raw_batch_from_libero_item(raw))
+        with nvtx_range("pi05_preprocess"):
+            batch = preprocessor(_raw_batch_from_libero_item(raw))
         preprocess_seconds = time.perf_counter() - preprocess_started
 
         queue_len_before = len(getattr(policy, "_action_queue", []))
         if mode == "reset":
-            policy.reset()
+            with nvtx_range("pi05_policy_reset"):
+                policy.reset()
             queue_len_before = 0
         if config.device == "cuda":
             import torch
@@ -247,16 +301,20 @@ def run_libero_action_inference(
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
         action_started = time.perf_counter()
-        raw_action = policy.select_action(batch)
+        with nvtx_range("pi05_select_action"):
+            with torch.inference_mode():
+                raw_action = policy.select_action(batch)
         if config.device == "cuda":
             torch.cuda.synchronize()
         action_seconds = time.perf_counter() - action_started
         queue_len_after = len(getattr(policy, "_action_queue", []))
 
         postprocess_started = time.perf_counter()
-        final_action = postprocessor(raw_action)
+        with nvtx_range("pi05_postprocess"):
+            final_action = postprocessor(raw_action)
         postprocess_seconds = time.perf_counter() - postprocess_started
-        metrics = action_vector_metrics(raw["action"], final_action.squeeze(0))
+        with nvtx_range("pi05_action_metrics"):
+            metrics = action_vector_metrics(raw["action"], final_action.squeeze(0))
 
         item = {
             "dataset_index": int(raw["index"].item())
@@ -315,6 +373,7 @@ def run_libero_action_inference(
         else None,
         "action_mae_mean": round(sum(mae_values) / len(mae_values), 6) if mae_values else None,
         "policy_class": type(policy).__name__,
+        "inference_optimizations": getattr(config, "mm_edge_inference_optimizations", {}),
         "features": dataset.features,
         "samples": samples,
     }
