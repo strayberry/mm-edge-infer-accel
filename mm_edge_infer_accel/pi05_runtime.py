@@ -116,15 +116,19 @@ def make_synthetic_batch():
 
 def load_policy_and_processors(model_id: str):
     import torch
-    from lerobot.configs import PreTrainedConfig
+    from lerobot.configs.policies import PreTrainedConfig
     from lerobot.policies.pi05 import PI05Policy
     import lerobot.policies.pi05.processor_pi05  # noqa: F401 - registers Pi0.5 processor step
-    from lerobot.processor import (
-        PolicyProcessorPipeline,
-        batch_to_transition,
-        policy_action_to_transition,
-        transition_to_batch,
-        transition_to_policy_action,
+    import lerobot.processor as lerobot_processor
+
+    PolicyProcessorPipeline = lerobot_processor.PolicyProcessorPipeline
+    batch_to_transition = lerobot_processor.batch_to_transition
+    transition_to_batch = lerobot_processor.transition_to_batch
+    policy_action_to_transition = getattr(
+        lerobot_processor, "policy_action_to_transition", batch_to_transition
+    )
+    transition_to_policy_action = getattr(
+        lerobot_processor, "transition_to_policy_action", transition_to_batch
     )
 
     optimizations = pi05_inference_optimizations()
