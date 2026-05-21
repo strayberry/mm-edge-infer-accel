@@ -63,7 +63,31 @@ cmake -B build -S . \
 - baseline: `pool=1, cache_frames=1`
 - cache2: `pool=1, cache_frames=2`
 
-评测脚本：
+### NPZ 评测数据生成
+
+NPZ 文件从 HuggingFace 的 LIBERO LeRobot dataset 导出，导出脚本：
+
+```bash
+python scripts/export_libero_npz.py \
+  --dataset-id "HuggingFaceVLA/libero" \
+  --episodes 0,1,2 \
+  --sample-count 100 \
+  --output outputs/libero_episodes0_1_2_100frames_each.npz
+```
+
+该脚本会：
+
+1. 用 `LeRobotDataset` 加载指定 episode。
+2. 取前 `sample-count` 帧（或整个 episode 的较小者）。
+3. 提取 `observation.images.image`（主相机）、`observation.images.image2`（wrist camera）、
+   `observation.state`、`task`、`action` 等字段。
+4. 图像统一转成 `uint8 HWC` 格式，动作/状态存为 `float32`。
+5. 输出为 `np.savez_compressed` 格式，包含 `images`、`wrist_images`、`states`、`tasks`、
+   `frame_indices`、`episode_indices`、`reference_actions` 等数组。
+
+NPZ 文件随后复制到 Orin 上供 `eval_libero.py` 使用。
+
+### 评测脚本
 
 ```bash
 python examples/orin/eval_libero.py \
