@@ -262,7 +262,7 @@ def _warmup_policy(policy, preprocessor, dataset, mode: str, warmup: int, device
 def run_libero_action_inference(
     model_id: str,
     dataset_id: str,
-    episode: int,
+    episodes: list[int],
     sample_count: int,
     mode: str,
     warmup: int,
@@ -271,10 +271,10 @@ def run_libero_action_inference(
     set_pi05_cache_env()
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-    log(f"loading dataset {dataset_id} episode={episode}")
+    log(f"loading dataset {dataset_id} episodes={episodes}")
     dataset_started = time.perf_counter()
     with nvtx_range("pi05_load_dataset"):
-        dataset = LeRobotDataset(repo_id=dataset_id, episodes=[episode])
+        dataset = LeRobotDataset(repo_id=dataset_id, episodes=episodes)
     dataset_seconds = time.perf_counter() - dataset_started
     log(f"dataset ready: len={len(dataset)}")
 
@@ -284,9 +284,9 @@ def run_libero_action_inference(
     _warmup_policy(policy, preprocessor, dataset, mode, warmup, config.device)
 
     samples = []
-    actual_sample_count = min(sample_count, len(dataset))
+    total_count = min(sample_count * len(episodes), len(dataset))
     total_started = time.perf_counter()
-    for idx in range(actual_sample_count):
+    for idx in range(total_count):
         with nvtx_range("pi05_dataset_getitem"):
             raw = dataset[idx]
         preprocess_started = time.perf_counter()
@@ -345,11 +345,13 @@ def run_libero_action_inference(
         }
         samples.append(item)
         log(
-            f"sample {idx}: frame={item['frame_index']} action={item['action_seconds']:.4f}s "
+            f"sample [{idx}]: frame={item['frame_index']} episode={item['episode_index']} "
+            f"action={item['action_seconds']:.4f}s "
             f"queue={queue_len_before}->{queue_len_after} mae={metrics.get('mae')}"
         )
 
     total_seconds = time.perf_counter() - total_started
+    total_count = len(samples)
     action_times = [s["action_seconds"] for s in samples]
     e2e_times = [s["end_to_end_seconds"] for s in samples]
     mae_values = [s["action_metrics"]["mae"] for s in samples if "mae" in s["action_metrics"]]
@@ -357,8 +359,8 @@ def run_libero_action_inference(
     result = {
         "model_id": model_id,
         "dataset_id": dataset_id,
-        "episode": episode,
-        "sample_count": actual_sample_count,
+        "episodes": episodes,
+        "sample_count": total_count,
         "source": "libero",
         "mode": mode,
         "warmup": warmup,
@@ -370,7 +372,7 @@ def run_libero_action_inference(
         else None,
         "action_time_summary": time_summary(action_times),
         "end_to_end_time_summary": time_summary(e2e_times),
-        "loop_hz": round(actual_sample_count / total_seconds, 4) if total_seconds else None,
+        "loop_hz": round(total_count / total_seconds, 4) if total_seconds else None,
         "chunk_predict_count": chunk_predict_count,
         "chunk_predict_hz": round(chunk_predict_count / total_seconds, 4)
         if total_seconds

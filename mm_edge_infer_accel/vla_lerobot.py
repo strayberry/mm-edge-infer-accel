@@ -7,7 +7,7 @@ from typing import Optional
 
 from .config import ExperimentConfig, config_to_dict, model_load_path
 from .env import collect_environment
-from .pi05_runtime import load_policy_only
+from .pi05_runtime import load_policy_only, run_libero_action_inference
 from .profiling import gpu_memory_snapshot_mb, nvtx_range
 
 
@@ -57,10 +57,15 @@ def _aggregate_metrics(
 def run_benchmark(cfg: ExperimentConfig, output: Optional[str] = None) -> dict:
     if cfg.runtime.backend != "lerobot":
         raise ValueError("Pi0.5 benchmark requires runtime.backend=lerobot")
-    if cfg.eval.dataset not in {"pi05_load_only"}:
-        raise NotImplementedError(
-            "Pi0.5 currently supports only eval.dataset=pi05_load_only. "
-            "Real LIBERO action inference needs LeRobotDataset and pre/post processors."
+    if cfg.eval.dataset != "pi05_load_only":
+        return run_libero_action_inference(
+            model_id=model_load_path(cfg),
+            dataset_id=cfg.eval.dataset,
+            episodes=cfg.eval.episodes,
+            sample_count=cfg.eval.sample_count,
+            mode=cfg.eval.mode,
+            warmup=cfg.profile.warmup,
+            output=output or str(Path(cfg.eval.output_dir) / f"{cfg.name}.json"),
         )
 
     load_path = model_load_path(cfg)

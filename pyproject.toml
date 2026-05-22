@@ -32,10 +32,6 @@ dev = [
   "pytest>=7",
   "ruff>=0.4",
 ]
-report = [
-  "matplotlib>=3.7",
-]
-
 [project.scripts]
 mm-edge-infer-accel = "mm_edge_infer_accel.cli:main"
 

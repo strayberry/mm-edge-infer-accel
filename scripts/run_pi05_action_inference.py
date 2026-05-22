@@ -42,7 +42,7 @@ def main() -> int:
         result = run_libero_action_inference(
             model_id=args.model_id,
             dataset_id=args.dataset_id,
-            episode=args.episode,
+            episodes=[args.episode],
             sample_count=args.sample_count,
             mode=args.mode,
             warmup=args.warmup,

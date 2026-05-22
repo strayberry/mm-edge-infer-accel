@@ -64,6 +64,8 @@ class EvalConfig:
     sample_count: int = 10
     sample_strategy: str = "first"
     output_dir: str = "outputs"
+    episodes: list[int] = field(default_factory=lambda: [0])
+    mode: str = "reset"
 
 
 @dataclass
@@ -120,6 +122,10 @@ def validate_config(cfg: ExperimentConfig) -> None:
         raise ValueError("runtime.concurrency must be >= 1")
     if cfg.eval.sample_count < 0:
         raise ValueError("eval.sample_count must be >= 0")
+    if not cfg.eval.episodes:
+        raise ValueError("eval.episodes must not be empty")
+    if any(e < 0 for e in cfg.eval.episodes):
+        raise ValueError("eval.episodes must all be >= 0")
     if cfg.model.max_new_tokens < 0:
         raise ValueError("model.max_new_tokens must be >= 0")
     if cfg.model.max_pixels is not None and cfg.model.max_pixels < 1:
@@ -130,6 +136,8 @@ def validate_config(cfg: ExperimentConfig) -> None:
         raise ValueError("quant.bits must be one of 4, 8, 16")
     if cfg.eval.sample_strategy not in {"first", "stratified"}:
         raise ValueError("eval.sample_strategy must be one of: first, stratified")
+    if cfg.eval.mode not in {"reset", "queue"}:
+        raise ValueError("eval.mode must be one of: reset, queue")
     if cfg.runtime.backend not in {"vllm", "pytorch", "lerobot", "transformers"}:
         raise ValueError("runtime.backend must be one of: vllm, pytorch, lerobot, transformers")
     family = cfg.model.family.lower()

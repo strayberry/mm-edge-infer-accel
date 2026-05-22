@@ -45,10 +45,19 @@ def test_sample_strategy_validation():
         validate_config(cfg)
 
 
+def test_action_mode_validation():
+    cfg = load_config("configs/vla/pi05_libero.yaml")
+    cfg.eval.mode = "invalid"
+
+    with pytest.raises(ValueError, match="eval.mode"):
+        validate_config(cfg)
+
+
 @pytest.mark.parametrize(
     ("section", "field", "value", "message"),
     [
         ("eval", "sample_count", -1, "sample_count"),
+        ("eval", "episodes", [-1], "episodes"),
         ("model", "max_new_tokens", -1, "max_new_tokens"),
         ("model", "max_pixels", 0, "max_pixels"),
     ],

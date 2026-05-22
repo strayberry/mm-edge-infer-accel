@@ -1,8 +1,10 @@
-# Pi0.5 Reference Profiling
+# Pi0.5 LeRobot Reference Profiling on RTX 3080 Ti
 
 ## 摘要
 
-本报告汇总 Pi0.5 LIBERO reference action inference 的 profiling 结论、已实施优化、撤回项，以及迁移到 Jetson AGX Orin 32G 的可行性。当前主线口径保持 checkpoint 默认 `10` denoising steps，不把降低 denoising steps 作为优化项。
+本报告保留 Pi0.5 LIBERO LeRobot/reference action inference 在 RTX 3080 Ti 上的 profiling 结论、已实施优化、撤回项，以及当时对迁移到 Jetson AGX Orin 32G 的可行性判断。它用于记录 reference PyTorch 路径的瓶颈和优化背景，不应与 Jetson 上的 FlashRT Pi0.5 latency/profiling 数值直接比较；当前 Orin FlashRT 实验结论见 `reports/pi05_orin_flashrt_experiment_report.md`。
+
+当前 reference 口径保持 checkpoint 默认 `10` denoising steps，不把降低 denoising steps 作为优化项。
 
 关键结论：
 
@@ -15,16 +17,16 @@
 
 ## 实验口径
 
-| 项目 | 值 |
-| --- | --- |
-| Model | `lerobot/pi05_libero_finetuned_v044` |
-| Dataset | `HuggingFaceVLA/libero` |
-| Episode | `0` |
-| Frames | `5` |
-| Mode | `reset` |
-| Warmup | `1` frame |
-| GPU | RTX 3080 Ti 12GB |
-| Pi0.5 env | `/root/autodl-tmp/envs/pi05` |
+| 项目      | 值                                   |
+| --------- | ------------------------------------ |
+| Model     | `lerobot/pi05_libero_finetuned_v044` |
+| Dataset   | `HuggingFaceVLA/libero`              |
+| Episode   | `0`                                  |
+| Frames    | `5`                                  |
+| Mode      | `reset`                              |
+| Warmup    | `1` frame                            |
+| GPU       | RTX 3080 Ti 12GB                     |
+| Pi0.5 env | `/root/autodl-tmp/envs/pi05`         |
 
 `reset` 模式表示每帧调用前执行 `policy.reset()`，强制每帧重新预测完整 action chunk。该模式适合定位完整模型推理瓶颈。部署时还需要参考 `queue` 模式，因为 policy 会复用 action queue，控制循环频率不能只看 `reset`。
 
@@ -32,32 +34,32 @@
 
 Nsight Systems 的 NVTX 阶段汇总显示，稳态耗时集中在 `pi05_select_action`：
 
-| 阶段 | 次数 | 总耗时 ms | 平均耗时 ms |
-| --- | ---: | ---: | ---: |
-| `pi05_load_policy` | 1 | 154969.2 | 154969.2 |
-| `pi05_load_config_processors` | 1 | 3151.6 | 3151.6 |
-| `pi05_select_action` | 5 | 2866.2 | 573.2 |
-| `pi05_warmup_select_action` | 1 | 1103.2 | 1103.2 |
-| `pi05_load_dataset` | 1 | 834.1 | 834.1 |
-| `pi05_dataset_getitem` | 5 | 33.0 | 6.6 |
-| `pi05_preprocess` | 5 | 9.2 | 1.8 |
-| `pi05_postprocess` | 5 | 4.1 | 0.8 |
+| 阶段                          | 次数 | 总耗时 ms | 平均耗时 ms |
+| ----------------------------- | ---: | --------: | ----------: |
+| `pi05_load_policy`            |    1 |  154969.2 |    154969.2 |
+| `pi05_load_config_processors` |    1 |    3151.6 |      3151.6 |
+| `pi05_select_action`          |    5 |    2866.2 |       573.2 |
+| `pi05_warmup_select_action`   |    1 |    1103.2 |      1103.2 |
+| `pi05_load_dataset`           |    1 |     834.1 |       834.1 |
+| `pi05_dataset_getitem`        |    5 |      33.0 |         6.6 |
+| `pi05_preprocess`             |    5 |       9.2 |         1.8 |
+| `pi05_postprocess`            |    5 |       4.1 |         0.8 |
 
 `pi05_select_action` 内部 CUDA 活动：
 
-| 类别 | 次数 | 总量 |
-| --- | ---: | ---: |
-| CUDA kernels | 66820 | 945.2 ms |
-| CUDA memcpy | 2030 | 4.8 ms |
-| CUDA runtime `cudaLaunchKernel` | 61050 | 447.0 ms |
-| CUDA runtime `cudaStreamSynchronize` | 105 | 287.3 ms |
+| 类别                                 |  次数 |     总量 |
+| ------------------------------------ | ----: | -------: |
+| CUDA kernels                         | 66820 | 945.2 ms |
+| CUDA memcpy                          |  2030 |   4.8 ms |
+| CUDA runtime `cudaLaunchKernel`      | 61050 | 447.0 ms |
+| CUDA runtime `cudaStreamSynchronize` |   105 | 287.3 ms |
 
 Memcpy 拆分：
 
-| 类别 | 次数 | 总耗时 | 总大小 |
-| --- | ---: | ---: | ---: |
+| 类别             | 次数 |   总耗时 |     总大小 |
+| ---------------- | ---: | -------: | ---------: |
 | Device-to-Device | 1925 | 4.772 ms | 939.830 MB |
-| Host-to-Device | 105 | 0.040 ms | 0.015 MB |
+| Host-to-Device   |  105 | 0.040 ms |   0.015 MB |
 
 结论：输入 H2D copy 可以忽略，主要瓶颈在模型计算和 kernel launch 调度。
 
@@ -67,40 +69,40 @@ Memcpy 拆分：
 
 原始 profiler 热点：
 
-| Operator / Kernel | Calls | CUDA total |
-| --- | ---: | ---: |
-| `aten::mm` | 4158 | 247.8 ms |
-| `aten::addmm` | 2697 | 128.5 ms |
-| Cutlass BF16 GEMM group | 108 | 110.4 ms |
-| Cutlass FP32/TF32 GEMM group | 1215 | 84.0 ms |
-| `aten::mul` | 7383 | 33.3 ms |
-| `aten::bmm` | 1221 | 24.3 ms |
-| `aten::add` | 7086 | 23.4 ms |
-| `aten::copy_` | 6921 | 22.4 ms |
-| GEMV group | 1110 | 21.8 ms |
-| `aten::_to_copy` | 4737 | 14.7 ms |
-| `aten::scaled_dot_product_attention` | 243 | 13.9 ms |
-| `aten::cat` | 2535 | 8.9 ms |
+| Operator / Kernel                    | Calls | CUDA total |
+| ------------------------------------ | ----: | ---------: |
+| `aten::mm`                           |  4158 |   247.8 ms |
+| `aten::addmm`                        |  2697 |   128.5 ms |
+| Cutlass BF16 GEMM group              |   108 |   110.4 ms |
+| Cutlass FP32/TF32 GEMM group         |  1215 |    84.0 ms |
+| `aten::mul`                          |  7383 |    33.3 ms |
+| `aten::bmm`                          |  1221 |    24.3 ms |
+| `aten::add`                          |  7086 |    23.4 ms |
+| `aten::copy_`                        |  6921 |    22.4 ms |
+| GEMV group                           |  1110 |    21.8 ms |
+| `aten::_to_copy`                     |  4737 |    14.7 ms |
+| `aten::scaled_dot_product_attention` |   243 |    13.9 ms |
+| `aten::cat`                          |  2535 |     8.9 ms |
 
 OPT-005 patch 后的 profiler 对比：
 
-| Operator | 原始 Calls | OPT-005 Calls | 变化 |
-| --- | ---: | ---: | ---: |
-| `aten::mm` | 4158 | 4158 | 0 |
-| `aten::addmm` | 2697 | 2697 | 0 |
-| `aten::scaled_dot_product_attention` | 243 | 243 | 0 |
-| `aten::mul` | 7383 | 7329 | -54 |
-| `aten::add` | 7086 | 7062 | -24 |
-| `aten::copy_` | 6921 | 6807 | -114 |
-| `aten::_to_copy` | 4737 | 4623 | -114 |
-| `aten::cat` | 2535 | 2448 | -87 |
+| Operator                             | 原始 Calls | OPT-005 Calls | 变化 |
+| ------------------------------------ | ---------: | ------------: | ---: |
+| `aten::mm`                           |       4158 |          4158 |    0 |
+| `aten::addmm`                        |       2697 |          2697 |    0 |
+| `aten::scaled_dot_product_attention` |        243 |           243 |    0 |
+| `aten::mul`                          |       7383 |          7329 |  -54 |
+| `aten::add`                          |       7086 |          7062 |  -24 |
+| `aten::copy_`                        |       6921 |          6807 | -114 |
+| `aten::_to_copy`                     |       4737 |          4623 | -114 |
+| `aten::cat`                          |       2535 |          2448 |  -87 |
 
 该结果说明 OPT-005 没有改变 GEMM 和 attention 主干计算，收益主要来自 denoise loop 内部 mask/timestep 构造、临时 tensor 和 Python/operator 调度减少。
 
 ## 性能对比
 
 | 版本 | Action mean | Action p50 | End-to-end mean | Loop Hz | Action MAE mean |
-| --- | ---: | ---: | ---: | ---: | ---: |
+| --- | --: | --: | --: | --: | --: |
 | Baseline | 573.3 ms | 569.5 ms | 576.0 ms | 1.71 | 0.012560 |
 | OPT-001 + OPT-002 | 470.8 ms | 464.2 ms | 473.1 ms | 2.08 | 0.013664 |
 | OPT-001 + OPT-002 + OPT-005 | 359.5 ms | 357.6 ms | 361.5 ms | 2.71 | 0.013821 |
@@ -108,20 +110,20 @@ OPT-005 patch 后的 profiler 对比：
 
 相对 baseline：
 
-| 版本 | Action mean 变化 | Loop Hz 变化 |
-| --- | ---: | ---: |
-| OPT-001 + OPT-002 | -17.9% | +21.6% |
-| OPT-001 + OPT-002 + OPT-005 | -37.3% | +58.5% |
+| 版本                        | Action mean 变化 | Loop Hz 变化 |
+| --------------------------- | ---------------: | -----------: |
+| OPT-001 + OPT-002           |           -17.9% |       +21.6% |
+| OPT-001 + OPT-002 + OPT-005 |           -37.3% |       +58.5% |
 
 ## 当前优化项
 
 | ID | 优化项 | 状态 | 开关/代码位置 | 说明 |
-| --- | --- | --- | --- | --- |
+| --- | --- | --- | --- | --- | --- | --- |
 | OPT-001 | TF32 matmul / cuDNN | 默认启用 | `MM_EDGE_PI05_TF32=1`，`mm_edge_infer_accel/pi05_runtime.py::pi05_inference_optimizations` | 让 Ampere FP32 matmul/conv 可走 TF32 Tensor Core。LeRobot 默认没有显式打开。 |
 | OPT-002 | `torch.inference_mode()` | 默认启用 | `mm_edge_infer_accel/pi05_runtime.py::_warmup_policy`、`run_libero_action_inference` | 关闭 autograd/version counter 等纯推理不需要的开销。 |
 | OPT-003 | `torch.compile` 接入 | 已接入，默认关闭 | `MM_EDGE_PI05_COMPILE=1`，`MM_EDGE_PI05_COMPILE_MODE=reduce-overhead` | 还没有作为有效收益记录，需要单独测首次编译、graph break、显存峰值和 steady-state。 |
 | OPT-005 | Pi0.5 denoise-loop patch | 已接入，默认关闭 | `MM_EDGE_PI05_PATCH_SAMPLE_ACTIONS=1`，`mm_edge_infer_accel/pi05_optimizations.py` | 缓存 timestep、suffix attention mask、position ids，减少 loop 内 `cat/to/copy_/cumsum/tensor` 等小 op。 |
-| OPT-006 | C++/CUDA `fused_denoise_update` | 已实现，默认 auto 回退 torch | `MM_EDGE_PI05_FUSED_UPDATE_BACKEND=auto|torch|cuda`，`csrc/pi05_ops/denoise_update_kernel.cu` | 单独实现 `x_t + dt * v_t`。当前小 tensor 上 forced CUDA 更慢，不建议强制启用。 |
+| OPT-006 | C++/CUDA `fused_denoise_update` | 已实现，默认 auto 回退 torch | `MM_EDGE_PI05_FUSED_UPDATE_BACKEND=auto | torch | cuda`，`csrc/pi05_ops/denoise_update_kernel.cu` | 单独实现 `x_t + dt * v_t`。当前小 tensor 上 forced CUDA 更慢，不建议强制启用。 |
 
 当前推荐配置：
 
@@ -178,21 +180,21 @@ FlashRT 的方向与本项目 profiling 结论一致：small-batch realtime VLA 
 
 目标设备：
 
-| 项目 | 值 |
-| --- | --- |
-| 设备 | Jetson AGX Orin 32G |
-| Machine | KST Jetson AGX Orin AVSAI |
-| SoC | tegra234 |
-| 架构 | aarch64 |
-| L4T | R36.4.7 |
-| Ubuntu | 22.04.5 LTS |
-| Kernel | 5.15.148-tegra |
-| CUDA Toolkit | 12.6.68 |
-| Python | 3.10.12 |
-| GCC/G++ | 11.4.0 |
-| RAM | 30698 MB |
-| SWAP | 15349 MB |
-| Power mode | MAXN |
+| 项目         | 值                        |
+| ------------ | ------------------------- |
+| 设备         | Jetson AGX Orin 32G       |
+| Machine      | KST Jetson AGX Orin AVSAI |
+| SoC          | tegra234                  |
+| 架构         | aarch64                   |
+| L4T          | R36.4.7                   |
+| Ubuntu       | 22.04.5 LTS               |
+| Kernel       | 5.15.148-tegra            |
+| CUDA Toolkit | 12.6.68                   |
+| Python       | 3.10.12                   |
+| GCC/G++      | 11.4.0                    |
+| RAM          | 30698 MB                  |
+| SWAP         | 15349 MB                  |
+| Power mode   | MAXN                      |
 
 适配判断：
 

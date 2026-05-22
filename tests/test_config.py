@@ -1,4 +1,4 @@
-from mm_edge_infer_accel import vlm
+from mm_edge_infer_accel import vla_lerobot, vlm
 from mm_edge_infer_accel.config import (
     load_config,
     model_load_path,
@@ -24,7 +24,39 @@ def test_load_qwen_config():
 def test_model_type_mapping():
     assert model_type_from_config(load_config("configs/vlm/smolvlm2_2b_fp32.yaml")) == "vlm"
     assert model_type_from_config(load_config("configs/vlm/qwen3vl_4b_gptq_local.yaml")) == "vlm"
-    assert model_type_from_config(load_config("configs/vla/pi05_libero_plan.yaml")) == "vla"
+    assert model_type_from_config(load_config("configs/vla/pi05_libero.yaml")) == "vla"
+
+
+def test_pi05_libero_config_runs_action_inference():
+    cfg = load_config("configs/vla/pi05_libero.yaml")
+
+    assert cfg.eval.dataset == "HuggingFaceVLA/libero"
+    assert cfg.eval.episodes == [0, 1, 2]
+    assert cfg.eval.sample_count == 100
+    assert cfg.eval.mode == "queue"
+    assert cfg.profile.warmup == 3
+
+
+def test_pi05_lerobot_benchmark_dispatches_libero_action_inference(monkeypatch):
+    cfg = load_config("configs/vla/pi05_libero.yaml")
+    received = {}
+
+    def fake_run_libero_action_inference(**kwargs):
+        received.update(kwargs)
+        return {"source": "libero"}
+
+    monkeypatch.setattr(vla_lerobot, "run_libero_action_inference", fake_run_libero_action_inference)
+
+    assert vla_lerobot.run_benchmark(cfg, output="outputs/test.json") == {"source": "libero"}
+    assert received == {
+        "model_id": "lerobot/pi05_libero_finetuned_v044",
+        "dataset_id": "HuggingFaceVLA/libero",
+        "episodes": [0, 1, 2],
+        "sample_count": 100,
+        "mode": "queue",
+        "warmup": 3,
+        "output": "outputs/test.json",
+    }
 
 
 def test_vlm_benchmark_requires_vllm_backend():
@@ -39,7 +71,7 @@ def test_vlm_benchmark_requires_vllm_backend():
 
 
 def test_family_backend_compatibility():
-    pi05_cfg = load_config("configs/vla/pi05_libero_plan.yaml")
+    pi05_cfg = load_config("configs/vla/pi05_libero.yaml")
     pi05_cfg.runtime.backend = "vllm"
     try:
         validate_config(pi05_cfg)

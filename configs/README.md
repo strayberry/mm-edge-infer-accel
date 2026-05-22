@@ -1,8 +1,6 @@
 # Configs
 
-Active configs are kept intentionally small. They define stable model/backend
-baselines; common experiment variants should be passed through CLI overrides
-instead of creating new YAML files.
+Active configs are kept intentionally small. They define stable model/backend baselines; common experiment variants should be passed through CLI overrides instead of creating new YAML files.
 
 ## Active configs
 
@@ -11,7 +9,7 @@ vlm/qwen3vl_4b_bf16.yaml
 vlm/qwen3vl_4b_awq_local.yaml
 vlm/qwen3vl_4b_gptq_local.yaml
 vlm/smolvlm2_2b_fp32.yaml
-vla/pi05_libero_plan.yaml
+vla/pi05_libero.yaml
 ```
 
 Use these overrides for routine variations:

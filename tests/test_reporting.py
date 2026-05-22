@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.reporting.analyze_qwen3vl4b_maxnew64_by_category import (
+from scripts.analyze_qwen3vl4b_maxnew64_by_category import (
     build_report,
     group_samples,
     markdown_table,

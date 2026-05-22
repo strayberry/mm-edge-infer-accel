@@ -4,7 +4,7 @@ model:
   family: pi05
   model_id: lerobot/pi05_libero_finetuned_v044
   model_path:
-  dtype: float16
+  dtype: bfloat16
   max_new_tokens: 0
 
 runtime:
@@ -13,11 +13,13 @@ runtime:
   device: cuda
 
 eval:
-  dataset: pi05_load_only
-  sample_count: 0
+  dataset: HuggingFaceVLA/libero
+  episodes: [0, 1, 2]
+  sample_count: 100
+  mode: queue
   output_dir: outputs
 
 profile:
-  warmup: 0
+  warmup: 3
   repeats: 1
   output_dir: profiling

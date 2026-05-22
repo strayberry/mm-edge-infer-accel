@@ -35,21 +35,21 @@ max_new_tokens: 128
 
 ## 总览
 
-| 指标 | Nsight benchmark | profile_generate |
-| --- | ---: | ---: |
-| Accuracy | 0.89 | 0.89 |
-| Correct | 89 / 100 | 89 / 100 |
-| Input tokens mean | 201.25 | 201.25 |
-| Input tokens max | 607 | 607 |
-| Generated tokens mean | 19.26 | 19.26 |
-| Generated tokens max | 128 | 128 |
-| Peak allocated memory | 4198.18 MB | 4198.18 MB |
-| Peak reserved memory | 4280.0 MB | 4280.0 MB |
-| Model load memory delta | 4186.0 MB | 4186.0 MB |
-| Request latency mean | 893.65 ms | 669.39 ms |
-| Request latency p50 | 263.73 ms | 200.65 ms |
-| Request latency p90 | 2646.85 ms | 1988.60 ms |
-| Request latency p95 | 3307.99 ms | 2446.97 ms |
+| 指标                    | Nsight benchmark | profile_generate |
+| ----------------------- | ---------------: | ---------------: |
+| Accuracy                |             0.89 |             0.89 |
+| Correct                 |         89 / 100 |         89 / 100 |
+| Input tokens mean       |           201.25 |           201.25 |
+| Input tokens max        |              607 |              607 |
+| Generated tokens mean   |            19.26 |            19.26 |
+| Generated tokens max    |              128 |              128 |
+| Peak allocated memory   |       4198.18 MB |       4198.18 MB |
+| Peak reserved memory    |        4280.0 MB |        4280.0 MB |
+| Model load memory delta |        4186.0 MB |        4186.0 MB |
+| Request latency mean    |        893.65 ms |        669.39 ms |
+| Request latency p50     |        263.73 ms |        200.65 ms |
+| Request latency p90     |       2646.85 ms |       1988.60 ms |
+| Request latency p95     |       3307.99 ms |       2446.97 ms |
 
 两次运行的 accuracy、token 数和显存对齐，说明样本和生成结果一致。Nsight 下 latency 更高，主要是 profiling/tracing 带来的额外开销，因此阶段比例分析更依赖 `profile_generate`。
 
@@ -65,20 +65,20 @@ generation_overhead: generate 总耗时 - forward 总耗时
 
 分类校验结果：
 
-| 指标 | 数值 |
-| --- | ---: |
-| forward_classification_warning_count | 0 |
-| prefill_forward_ms_mean | 73.20 ms |
-| prefill_forward_ms_p50 | 62.72 ms |
-| prefill_forward_ms_p90 | 103.70 ms |
-| decode_ms_mean | 541.31 ms |
-| decode_ms_p50 | 118.04 ms |
-| decode_ms_p90 | 1810.99 ms |
-| decode_ms_p95 | 2311.87 ms |
-| generate_ms_mean | 637.77 ms |
-| generation_overhead_ms_mean | 23.27 ms |
-| tpot_ms_mean | 29.71 ms |
-| tpot_ms_p90 | 30.92 ms |
+| 指标                                 |       数值 |
+| ------------------------------------ | ---------: |
+| forward_classification_warning_count |          0 |
+| prefill_forward_ms_mean              |   73.20 ms |
+| prefill_forward_ms_p50               |   62.72 ms |
+| prefill_forward_ms_p90               |  103.70 ms |
+| decode_ms_mean                       |  541.31 ms |
+| decode_ms_p50                        |  118.04 ms |
+| decode_ms_p90                        | 1810.99 ms |
+| decode_ms_p95                        | 2311.87 ms |
+| generate_ms_mean                     |  637.77 ms |
+| generation_overhead_ms_mean          |   23.27 ms |
+| tpot_ms_mean                         |   29.71 ms |
+| tpot_ms_p90                          |   30.92 ms |
 
 核心结论：
 
@@ -93,26 +93,26 @@ TPOT 很稳定，尾延迟主要由 generated_tokens 数量决定。
 
 NVTX 汇总：
 
-| Range | Instances | 总耗时 | 平均耗时 |
-| --- | ---: | ---: | ---: |
-| `vlm_ocrbench_loop` | 1 | 100.43 s | 100.43 s |
-| `vlm_generate` | 100 | 86.02 s | 860.24 ms |
-| `vlm_ttft` | 100 | 9.68 s | 96.83 ms |
-| `vlm_load_model` | 1 | 4.87 s | 4.87 s |
-| `vlm_preprocess` | 100 | 3.30 s | 33.00 ms |
-| `vlm_warmup` | 1 | 1.07 s | 1.07 s |
-| `vlm_decode` | 100 | 0.024 s | 0.24 ms |
+| Range               | Instances |   总耗时 |  平均耗时 |
+| ------------------- | --------: | -------: | --------: |
+| `vlm_ocrbench_loop` |         1 | 100.43 s |  100.43 s |
+| `vlm_generate`      |       100 |  86.02 s | 860.24 ms |
+| `vlm_ttft`          |       100 |   9.68 s |  96.83 ms |
+| `vlm_load_model`    |         1 |   4.87 s |    4.87 s |
+| `vlm_preprocess`    |       100 |   3.30 s |  33.00 ms |
+| `vlm_warmup`        |         1 |   1.07 s |    1.07 s |
+| `vlm_decode`        |       100 |  0.024 s |   0.24 ms |
 
 Nsight 的系统级结论与 `profile_generate` 一致：`vlm_generate` 是主耗时，预处理和文本 decode 都不是当前主瓶颈。
 
 CUDA API 汇总：
 
-| API | Calls | Total Time |
-| --- | ---: | ---: |
-| `cudaLaunchKernel` | 3,500,147 | 22.40 s |
-| `cudaMemcpyAsync` | 37,576 | 6.69 s |
-| `cudaStreamSynchronize` | 26,007 | 0.48 s |
-| `cudaMemsetAsync` | 57,696 | 0.40 s |
+| API                     |     Calls | Total Time |
+| ----------------------- | --------: | ---------: |
+| `cudaLaunchKernel`      | 3,500,147 |    22.40 s |
+| `cudaMemcpyAsync`       |    37,576 |     6.69 s |
+| `cudaStreamSynchronize` |    26,007 |     0.48 s |
+| `cudaMemsetAsync`       |    57,696 |     0.40 s |
 
 `cudaLaunchKernel` 次数很高，这是自回归 decode 的典型形态。每生成一个 token 都会触发大量小 kernel，因此长输出样本会带来明显尾延迟。
 
@@ -132,12 +132,12 @@ LayerNorm / activation
 
 MemOps 汇总：
 
-| Operation | Count | Total Time |
-| --- | ---: | ---: |
-| Host-to-Device memcpy | 2361 | 1.42 s |
-| CUDA memset | 57696 | 0.03 s |
-| Device-to-Device memcpy | 11569 | 0.028 s |
-| Device-to-Host memcpy | 23646 | 0.025 s |
+| Operation               | Count | Total Time |
+| ----------------------- | ----: | ---------: |
+| Host-to-Device memcpy   |  2361 |     1.42 s |
+| CUDA memset             | 57696 |     0.03 s |
+| Device-to-Device memcpy | 11569 |    0.028 s |
+| Device-to-Host memcpy   | 23646 |    0.025 s |
 
 H2D copy 不是总体主瓶颈，但存在长尾，最大 H2D copy 约 181 ms。后续如果做摄像头输入或 Jetson 部署，需要继续关注 CPU preprocessing、H2D copy 和 stream overlap。
 
@@ -146,7 +146,7 @@ H2D copy 不是总体主瓶颈，但存在长尾，最大 H2D copy 约 181 ms。
 下面使用 `profile_generate` 的 100 sample 结果，按 OCRBench `question_type` 聚合。
 
 | Question Type | N | Acc | Input Mean | Output Mean | Prefill Mean | Decode Mean | Generate Mean | Request Mean |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| --- | --: | --: | --: | --: | --: | --: | --: | --: |
 | Artistic Text Recognition | 10 | 0.90 | 137.4 | 2.7 | 88.9 ms | 51.4 ms | 164.8 ms | 180.0 ms |
 | Digit String Recognition | 10 | 0.80 | 89.1 | 5.2 | 62.5 ms | 123.6 ms | 198.6 ms | 206.4 ms |
 | Doc-oriented VQA | 10 | 0.90 | 579.7 | 62.8 | 103.1 ms | 1830.3 ms | 1984.0 ms | 2037.7 ms |
@@ -160,22 +160,18 @@ H2D copy 不是总体主瓶颈，但存在长尾，最大 H2D copy 约 181 ms。
 
 主要观察：
 
-1. **Doc-oriented VQA 和 Scene Text-centric VQA 主导尾延迟。**
-   它们平均输出约 60 个 token，decode 接近 1.8 s。
+1. **Doc-oriented VQA 和 Scene Text-centric VQA 主导尾延迟。** 它们平均输出约 60 个 token，decode 接近 1.8 s。
 
-2. **KIE 的输入 token 很多，但延迟没有 Doc VQA 高。**
-   KIE 平均输入 593.9 token，prefill 约 104 ms，但输出只有 15.1 token，因此总延迟明显低于 Doc VQA。
+2. **KIE 的输入 token 很多，但延迟没有 Doc VQA 高。** KIE 平均输入 593.9 token，prefill 约 104 ms，但输出只有 15.1 token，因此总延迟明显低于 Doc VQA。
 
-3. **普通 OCR 类任务很快。**
-   Regular、Irregular、Handwriting 等类别输出只有 2-3 token，请求平均延迟约 110-130 ms。
+3. **普通 OCR 类任务很快。** Regular、Irregular、Handwriting 等类别输出只有 2-3 token，请求平均延迟约 110-130 ms。
 
-4. **Scene Text-centric VQA 准确率最低。**
-   该类别 accuracy 只有 0.50，同时输出长，说明它既慢又不稳定，后续需要单独看 prompt 和评测规则。
+4. **Scene Text-centric VQA 准确率最低。** 该类别 accuracy 只有 0.50，同时输出长，说明它既慢又不稳定，后续需要单独看 prompt 和评测规则。
 
 ## 最慢样本
 
 | Type | Request | Output Tokens | Input Tokens | Correct |
-| --- | ---: | ---: | ---: | --- |
+| --- | --: | --: | --: | --- |
 | Doc-oriented VQA | 3979.4 ms | 124 | 577 | true |
 | Scene Text-centric VQA | 3960.3 ms | 128 | 209 | true |
 | Doc-oriented VQA | 3889.3 ms | 128 | 593 | false |
@@ -219,7 +215,4 @@ peak reserved: 4280 MB
 | P1 | TensorRT / 推理引擎优化 | 做局部模块或 vision encoder 的部署可行性验证 | ONNX/TRT 可导出性、模块 latency、精度偏差 |
 | P2 | max_pixels / visual token control | 主要优化 prefill，作为后续边缘部署准备 | input tokens、prefill、accuracy、H2D/preprocess |
 
-后续已经完成 `Qwen3-VL-4B BF16` 的 vLLM 对比报告，见
-`reports/qwen3vl_4b_vllm_bf16_comparison.md`。旧的 bnb4 结果来自
-Transformers/bitsandbytes 路径，不再作为当前 vLLM 主对比口径。下一步优化重点应回到
-decode 加速、KV cache 管理、视觉 token 预算 sweep，以及 VLA baseline。
+后续已经完成 `Qwen3-VL-4B BF16` 的 vLLM 对比报告，见 `reports/qwen3vl_4b_vllm_bf16_comparison.md`。旧的 bnb4 结果来自 Transformers/bitsandbytes 路径，不再作为当前 vLLM 主对比口径。下一步优化重点应回到 decode 加速、KV cache 管理、视觉 token 预算 sweep，以及 VLA baseline。
