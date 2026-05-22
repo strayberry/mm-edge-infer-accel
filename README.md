@@ -269,9 +269,8 @@ Reports summarize completed experiments. The most useful entry points are:
 - `reports/qwen3vl_4b_vllm_bf16_comparison.md`
 - `reports/qwen3vl_4b_vllm_concurrency_curve.md`
 - `reports/pi05_orin_flashrt_experiment_report.md`
-- `reports/pi05_lerobot_libero_action_inference_rtx3080ti.md`
-- `reports/pi05_lerobot_libero_action_stability_sweep_rtx3080ti.md`
 - `reports/pi05_lerobot_reference_profiling_rtx3080ti.md`
+- `reports/pi05_prefix_kv_cache_optimization_rtx3080ti.md`
 
 `outputs/` and `profiling/` are local artifacts and are gitignored.
 

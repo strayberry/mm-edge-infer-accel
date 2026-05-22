@@ -8,9 +8,9 @@ import sys
 from typing import Any, Dict, List
 
 
-def _run(cmd: List[str]) -> str:
+def _run(cmd: List[str], timeout: int = 10) -> str:
     try:
-        return subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT).strip()
+        return subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT, timeout=timeout).strip()
     except Exception as exc:  # pragma: no cover - hardware dependent
         return f"unavailable: {exc}"
 

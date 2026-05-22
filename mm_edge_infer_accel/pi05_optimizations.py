@@ -8,36 +8,26 @@ from typing import Any
 import torch
 import torch.nn.functional as F  # noqa: N812
 
-from .pi05_kernels import fused_denoise_update, fused_denoise_update_backend
-
 
 @dataclass(frozen=True)
 class Pi05PatchResult:
     sample_actions_patched: bool
-    fused_denoise_update: bool
-    fused_denoise_update_backend: str
-    cached_timesteps: bool
-    cached_suffix_masks: bool
     reason: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "sample_actions_patched": self.sample_actions_patched,
-            "fused_denoise_update": self.fused_denoise_update,
-            "fused_denoise_update_backend": self.fused_denoise_update_backend,
-            "cached_timesteps": self.cached_timesteps,
-            "cached_suffix_masks": self.cached_suffix_masks,
             "reason": self.reason,
         }
 
 
 def apply_pi05_optimizations(policy, *, enabled: bool) -> Pi05PatchResult:
     if not enabled:
-        return Pi05PatchResult(False, False, "torch", False, False, "disabled")
+        return Pi05PatchResult(False, "disabled")
 
     model = getattr(policy, "model", None)
     if model is None:
-        return Pi05PatchResult(False, False, "torch", False, False, "policy has no model")
+        return Pi05PatchResult(False, "policy has no model")
 
     required = (
         "embed_prefix",
@@ -51,12 +41,13 @@ def apply_pi05_optimizations(policy, *, enabled: bool) -> Pi05PatchResult:
     )
     missing = [name for name in required if not hasattr(model, name)]
     if missing:
-        return Pi05PatchResult(False, False, "torch", False, False, f"missing attributes: {missing}")
+        return Pi05PatchResult(False, f"missing attributes: {missing}")
 
     if getattr(model, "_mm_edge_original_sample_actions", None) is None:
         model._mm_edge_original_sample_actions = model.sample_actions
     model.sample_actions = types.MethodType(_optimized_sample_actions, model)
-    return Pi05PatchResult(True, True, fused_denoise_update_backend(), True, True)
+
+    return Pi05PatchResult(True)
 
 
 @torch.no_grad()
@@ -72,13 +63,8 @@ def _optimized_sample_actions(
 ):
     if self._rtc_enabled():
         return self._mm_edge_original_sample_actions(
-            images,
-            img_masks,
-            tokens,
-            masks,
-            noise=noise,
-            num_steps=num_steps,
-            **kwargs,
+            images, img_masks, tokens, masks,
+            noise=noise, num_steps=num_steps, **kwargs,
         )
 
     if num_steps is None:
@@ -109,31 +95,25 @@ def _optimized_sample_actions(
         use_cache=True,
     )
 
-    dt = -1.0 / num_steps
-    timestep_cache = _make_timestep_cache(num_steps, bsize, device, dt)
     suffix_context = _make_suffix_context(self, prefix_pad_masks)
+    dt = -1.0 / num_steps
 
     x_t = noise
     for step in range(num_steps):
+        timestep = torch.full((bsize,), 1.0 + step * dt, device=device)
         v_t = _denoise_step_cached(
             self,
-            past_key_values=past_key_values,
+        past_key_values=copy.deepcopy(past_key_values),
             x_t=x_t,
-            timestep=timestep_cache[step],
+            timestep=timestep,
             suffix_context=suffix_context,
         )
-        x_t = fused_denoise_update(x_t, v_t, dt)
+        x_t = x_t.add(v_t, alpha=dt)
 
         if self.rtc_processor is not None and self.rtc_processor.is_debug_enabled():
-            self.rtc_processor.track(time=float(timestep_cache[step][0].item()), x_t=x_t, v_t=v_t)
+            self.rtc_processor.track(time=float(timestep[0].item()), x_t=x_t, v_t=v_t)
 
     return x_t
-
-
-def _make_timestep_cache(num_steps: int, bsize: int, device, dt: float):
-    steps = torch.arange(num_steps, dtype=torch.float32, device=device)
-    values = 1.0 + steps * dt
-    return values[:, None].expand(num_steps, bsize)
 
 
 def _make_suffix_context(model, prefix_pad_masks):
@@ -167,7 +147,7 @@ def _denoise_step_cached(model, *, past_key_values, x_t, timestep, suffix_contex
     outputs_embeds, _ = model.paligemma_with_expert.forward(
         attention_mask=suffix_context["attention_mask"],
         position_ids=suffix_context["position_ids"],
-        past_key_values=copy.deepcopy(past_key_values),
+        past_key_values=past_key_values,
         inputs_embeds=[None, suffix_embs],
         use_cache=False,
         adarms_cond=[None, adarms_cond],

@@ -35,6 +35,18 @@ def test_pi05_libero_config_runs_action_inference():
     assert cfg.eval.sample_count == 100
     assert cfg.eval.mode == "queue"
     assert cfg.profile.warmup == 3
+    assert cfg.runtime.enable_prefix_kv_cache is True
+
+
+def test_enable_prefix_kv_cache_defaults_to_true():
+    cfg = load_config("configs/vlm/qwen3vl_4b_bf16.yaml")
+    assert cfg.runtime.enable_prefix_kv_cache is True
+
+
+def test_enable_prefix_kv_cache_can_be_disabled_via_yaml():
+    cfg = load_config("configs/vla/pi05_libero.yaml")
+    cfg.runtime.enable_prefix_kv_cache = False
+    assert cfg.runtime.enable_prefix_kv_cache is False
 
 
 def test_pi05_lerobot_benchmark_dispatches_libero_action_inference(monkeypatch):
@@ -56,6 +68,7 @@ def test_pi05_lerobot_benchmark_dispatches_libero_action_inference(monkeypatch):
         "mode": "queue",
         "warmup": 3,
         "output": "outputs/test.json",
+        "enable_prefix_kv_cache": True,
     }
 
 

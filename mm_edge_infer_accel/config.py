@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 
@@ -26,20 +26,20 @@ MODEL_FAMILY_TO_BACKENDS = {
 class ModelConfig:
     model_id: str
     family: str
-    model_path: Optional[str] = None
+    model_path: str | None = None
     dtype: str = "float16"
     max_new_tokens: int = 128
-    max_pixels: Optional[int] = None
+    max_pixels: int | None = None
     trust_remote_code: bool = True
 
 
 @dataclass
 class QuantConfig:
     method: str = "none"
-    bits: Optional[int] = None
-    group_size: Optional[int] = None
-    calibration: Optional[str] = None
-    keep_fp16_modules: List[str] = field(default_factory=list)
+    bits: int | None = None
+    group_size: int | None = None
+    calibration: str | None = None
+    keep_fp16_modules: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -54,8 +54,9 @@ class RuntimeConfig:
     gpu_memory_utilization: float = 0.85
     enforce_eager: bool = True
     disable_flashinfer_sampler: bool = True
-    mm_processor_kwargs: Dict[str, Any] = field(default_factory=dict)
-    speculative_config: Optional[Dict[str, Any]] = None
+    mm_processor_kwargs: dict[str, Any] = field(default_factory=dict)
+    speculative_config: dict[str, Any] | None = None
+    enable_prefix_kv_cache: bool = True
 
 
 @dataclass
@@ -86,7 +87,7 @@ class ExperimentConfig:
     profile: ProfileConfig = field(default_factory=ProfileConfig)
 
 
-def _require_mapping(value: Any, section: str) -> Dict[str, Any]:
+def _require_mapping(value: Any, section: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"Config section '{section}' must be a mapping")
     return value
@@ -122,9 +123,13 @@ def validate_config(cfg: ExperimentConfig) -> None:
         raise ValueError("runtime.concurrency must be >= 1")
     if cfg.eval.sample_count < 0:
         raise ValueError("eval.sample_count must be >= 0")
-    if not cfg.eval.episodes:
+    episodes = cfg.eval.episodes
+    if isinstance(episodes, int):
+        episodes = [episodes]
+        cfg.eval.episodes = episodes
+    if not episodes:
         raise ValueError("eval.episodes must not be empty")
-    if any(e < 0 for e in cfg.eval.episodes):
+    if any(e < 0 for e in episodes):
         raise ValueError("eval.episodes must all be >= 0")
     if cfg.model.max_new_tokens < 0:
         raise ValueError("model.max_new_tokens must be >= 0")
@@ -168,7 +173,7 @@ def validate_config(cfg: ExperimentConfig) -> None:
             raise ValueError("runtime.speculative_config.num_speculative_tokens must be >= 1")
 
 
-def config_to_dict(cfg: ExperimentConfig) -> Dict[str, Any]:
+def config_to_dict(cfg: ExperimentConfig) -> dict[str, Any]:
     return {
         "name": cfg.name,
         "model": cfg.model.__dict__,

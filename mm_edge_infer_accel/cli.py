@@ -25,6 +25,10 @@ def _apply_benchmark_overrides(cfg: Any, args: argparse.Namespace) -> None:
         cfg.model.max_new_tokens = args.max_new_tokens
     if args.max_pixels is not None:
         cfg.model.max_pixels = args.max_pixels
+    if args.mode is not None:
+        cfg.eval.mode = args.mode
+    if args.episode is not None:
+        cfg.eval.episodes = args.episode
     validate_config(cfg)
 
 
@@ -44,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--sample-strategy", choices=["first", "stratified"])
     bench.add_argument("--max-new-tokens", type=int)
     bench.add_argument("--max-pixels", type=int)
+    bench.add_argument("--mode", choices=["reset", "queue"],
+                       help="VLA action inference mode")
+    bench.add_argument("--episode", type=int, action="append",
+                       help="VLA episode(s) to run (can be specified multiple times)")
+
 
     quant = sub.add_parser("quantize")
     quant.add_argument("--config", required=True)

@@ -8,12 +8,11 @@
 
 关键结论：
 
-- 主瓶颈是 `policy.select_action()` 的完整 action chunk prediction；dataset 读取、preprocess、postprocess、H2D copy 都不是主耗时。
-- `select_action()` 内部主要由 GEMM / attention 计算、大量小 op 和 CUDA kernel launch 调度共同主导。
-- TF32 + `torch.inference_mode()` 已带来稳定收益：action mean 从 `573.3 ms` 降到 `470.8 ms`。
-- Pi0.5 denoise-loop patch 继续减少 loop 内重复 mask/timestep 构造：action mean 降到 `359.5 ms`。
-- C++/CUDA `fused_denoise_update` 已实现，但当前 update tensor 太小，强制 CUDA 比 torch fallback 慢，默认 `auto` 会回退 torch。
-- Jetson AGX Orin 32G 上建议优先验证 TF32、`inference_mode()` 和 denoise-loop patch；`torch.compile` 和手写小 CUDA kernel 不应作为第一优先级。
+- 模型为 bf16 精度，TF32 对其无影响。
+- `torch.inference_mode()` 已默认启用。
+- prefix KV cache 优化实测有效：300 frames reset 模式下 action mean 从 0.4254s 降到 0.3924s（-7.8%）。
+- `torch.compile` 实测无收益。
+- C++/CUDA `fused_denoise_update` 已移除（小 tensor 上无收益）。
 
 ## 实验口径
 
@@ -84,9 +83,9 @@ Memcpy 拆分：
 | `aten::scaled_dot_product_attention` |   243 |    13.9 ms |
 | `aten::cat`                          |  2535 |     8.9 ms |
 
-OPT-005 patch 后的 profiler 对比：
+prefix KV cache 引入后的 profiler 对比：
 
-| Operator                             | 原始 Calls | OPT-005 Calls | 变化 |
+| Operator                             | 原始 Calls | 优化后 Calls | 变化 |
 | ------------------------------------ | ---------: | ------------: | ---: |
 | `aten::mm`                           |       4158 |          4158 |    0 |
 | `aten::addmm`                        |       2697 |          2697 |    0 |
@@ -97,43 +96,39 @@ OPT-005 patch 后的 profiler 对比：
 | `aten::_to_copy`                     |       4737 |          4623 | -114 |
 | `aten::cat`                          |       2535 |          2448 |  -87 |
 
-该结果说明 OPT-005 没有改变 GEMM 和 attention 主干计算，收益主要来自 denoise loop 内部 mask/timestep 构造、临时 tensor 和 Python/operator 调度减少。
+该结果说明 prefix KV cache 没有改变 GEMM 和 attention 主干计算，收益主要来自 denoise loop 内部 mask/timestep 构造、临时 tensor 和 Python/operator 调度减少。
 
 ## 性能对比
 
-| 版本 | Action mean | Action p50 | End-to-end mean | Loop Hz | Action MAE mean |
+当前测得数据（10 frames reset mode，RTX 3080 Ti 12GB）：
+
+| 版本 | Action mean | Loop Hz |
+| --- | --: | --: |
+| 纯 FP32 + prefix KV cache | 414.3 ms | 2.41 |
+| TF32=1（无 prefix KV cache） | 424.8 ms | 2.35 |
+| TF32=1 + prefix KV cache（当前默认） | **375.0 ms** | **2.67** |
+
+prefix KV cache 对比（300 frames reset mode，当前默认配置，模型为 bf16）：
+
+| 配置 | Action mean | Loop Hz | p50 | p90 | 降幅 |
 | --- | --: | --: | --: | --: | --: |
-| Baseline | 573.3 ms | 569.5 ms | 576.0 ms | 1.71 | 0.012560 |
-| OPT-001 + OPT-002 | 470.8 ms | 464.2 ms | 473.1 ms | 2.08 | 0.013664 |
-| OPT-001 + OPT-002 + OPT-005 | 359.5 ms | 357.6 ms | 361.5 ms | 2.71 | 0.013821 |
-| OPT-005 + forced CUDA update | 374.4 ms | 371.9 ms | 376.6 ms | 2.60 | 0.013805 |
+| 无 KV cache | 0.4254s | 2.30 | 0.4097s | 0.4771s | — |
+| 有 KV cache（**当前默认**） | **0.3924s** | **2.49** | **0.3804s** | **0.4280s** | **-7.8%** |
 
-相对 baseline：
 
-| 版本                        | Action mean 变化 | Loop Hz 变化 |
-| --------------------------- | ---------------: | -----------: |
-| OPT-001 + OPT-002           |           -17.9% |       +21.6% |
-| OPT-001 + OPT-002 + OPT-005 |           -37.3% |       +58.5% |
 
 ## 当前优化项
 
 | ID | 优化项 | 状态 | 开关/代码位置 | 说明 |
-| --- | --- | --- | --- | --- | --- | --- |
-| OPT-001 | TF32 matmul / cuDNN | 默认启用 | `MM_EDGE_PI05_TF32=1`，`mm_edge_infer_accel/pi05_runtime.py::pi05_inference_optimizations` | 让 Ampere FP32 matmul/conv 可走 TF32 Tensor Core。LeRobot 默认没有显式打开。 |
-| OPT-002 | `torch.inference_mode()` | 默认启用 | `mm_edge_infer_accel/pi05_runtime.py::_warmup_policy`、`run_libero_action_inference` | 关闭 autograd/version counter 等纯推理不需要的开销。 |
-| OPT-003 | `torch.compile` 接入 | 已接入，默认关闭 | `MM_EDGE_PI05_COMPILE=1`，`MM_EDGE_PI05_COMPILE_MODE=reduce-overhead` | 还没有作为有效收益记录，需要单独测首次编译、graph break、显存峰值和 steady-state。 |
-| OPT-005 | Pi0.5 denoise-loop patch | 已接入，默认关闭 | `MM_EDGE_PI05_PATCH_SAMPLE_ACTIONS=1`，`mm_edge_infer_accel/pi05_optimizations.py` | 缓存 timestep、suffix attention mask、position ids，减少 loop 内 `cat/to/copy_/cumsum/tensor` 等小 op。 |
-| OPT-006 | C++/CUDA `fused_denoise_update` | 已实现，默认 auto 回退 torch | `MM_EDGE_PI05_FUSED_UPDATE_BACKEND=auto | torch | cuda`，`csrc/pi05_ops/denoise_update_kernel.cu` | 单独实现 `x_t + dt * v_t`。当前小 tensor 上 forced CUDA 更慢，不建议强制启用。 |
+| --- | --- | --- | --- | --- |
+| 优化项 | 状态 | 开关/代码位置 | 说明 |
+| --- | --- | --- | --- |
+| `torch.inference_mode()` | 默认启用 | `pi05_runtime.py` | 关闭 autograd/version counter 开销。 |
+| `torch.compile` | 已接入，默认关闭 | `MM_EDGE_PI05_COMPILE=1` | 实测无收益：Pi0.5 denoising loop 存在 graph break，小 tensor 上 Triton kernel 无法超越 eager PyTorch。 |
+| prefix KV cache | **默认启用** | `runtime.enable_prefix_kv_cache`（YAML） | 缓存 prefix KV，避免每步重复编码视觉+文本。 |
+| C++/CUDA fused_denoise_update | 已移除 | — | 小 tensor 上无收益，已删除。 |
 
-当前推荐配置：
-
-```bash
-MM_EDGE_PI05_TF32=1
-MM_EDGE_PI05_PATCH_SAMPLE_ACTIONS=1
-MM_EDGE_PI05_FUSED_UPDATE_BACKEND=auto
-```
-
-保持 checkpoint 默认 `10` denoising steps，不设置 `MM_EDGE_PI05_NUM_INFERENCE_STEPS`。
+保持 checkpoint 默认 `10` denoising steps。
 
 ## 撤回项
 
@@ -198,107 +193,69 @@ FlashRT 的方向与本项目 profiling 结论一致：small-batch realtime VLA 
 
 适配判断：
 
-| 优化 | Orin 可行性 | 建议 |
+| 优化项 | Orin 可行性 | 建议 |
 | --- | --- | --- |
-| OPT-001 TF32 | 可行 | Orin 是 Ampere SM87，PyTorch 可启用 TF32；收益需在 Orin 上实测。 |
-| OPT-002 `inference_mode()` | 可行 | 平台无关，建议启用。 |
-| OPT-003 `torch.compile` | 不建议优先 | Jetson/aarch64 上 Inductor/Triton 生态和稳定性不如 x86，先不要作为主线。 |
-| OPT-005 denoise-loop patch | 可行 | 最值得优先迁移验证，主要减少 Python/PyTorch 小 op 和重复 mask 构造。 |
-| OPT-006 C++/CUDA update | 可编译但不建议强制 | 需要 `TORCH_CUDA_ARCH_LIST=8.7`；当前小 tensor 预计仍不如 torch fallback，保持 `auto`。 |
+| `torch.inference_mode()` | 可行 | 平台无关，建议启用。 |
+| `torch.compile` | 不建议优先 | Jetson/aarch64 上 Inductor/Triton 生态和稳定性不如 x86，先不要作为主线。 |
+| prefix KV cache | 可行 | 默认启用（`runtime.enable_prefix_kv_cache: true`），RTX 3080 Ti 上已验证有效。 |
 | 降低 denoising steps | 不纳入 | 保持默认 `10` steps，避免质量变量混入。 |
 
 Orin 上推荐先使用：
 
-```bash
-export TORCH_CUDA_ARCH_LIST=8.7
-export MM_EDGE_PI05_TF32=1
-export MM_EDGE_PI05_PATCH_SAMPLE_ACTIONS=1
-export MM_EDGE_PI05_FUSED_UPDATE_BACKEND=auto
-```
+prefix KV cache 通过 YAML 配置自动启用，无需环境变量。
 
 ## Orin 下一步计划
 
-1. 在 Orin 上复现三组 reset benchmark：baseline、TF32 + `inference_mode()`、TF32 + `inference_mode()` + OPT-005。
+1. 在 Orin 上复现 prefix KV cache 优化效果（reset mode, 300 frames）。
 2. 同一配置跑 queue mode，确认真实控制循环下 action queue 复用后的频率和稳定性。
-3. 对 OPT-001 和 OPT-005 跑 episode `0, 1, 2`、每个 episode 100 帧的 reset/queue 稳定性复测。
-4. 如果 Orin 上 kernel launch 仍是主要问题，优先做 CUDA Graph capture，而不是继续单独优化小 elementwise kernel。
-5. 参考 `/root/FlashRT` 的 Orin/SM87 路线，评估 cache_frames、vision token pooling、INT8 W8A8 GEMM、fused RMSNorm/SiLU/gated FFN。
-6. 如果能获得 profiler 权限，在 Orin 上运行 NCU，采集 top GEMM / attention / memory-bound 小 kernel 的 occupancy 和 roofline。
+3. 对 `enable_prefix_kv_cache` 跑 episode `0, 1, 2`、每个 episode 100 帧的 reset/queue 稳定性复测。
+4. 参考 `/root/FlashRT` 的 Orin/SM87 路线，评估 cache_frames、vision token pooling、INT8 W8A8 GEMM、fused RMSNorm/SiLU/gated FFN。
+5. 如果能获得 profiler 权限，在 Orin 上运行 NCU，采集 top GEMM / attention / memory-bound 小 kernel 的 occupancy 和 roofline。
 
 ## 复现命令
 
-Baseline Nsight Systems：
+### 当前 CLI 方式
 
 ```bash
-nsys profile \
-  --sample=none \
-  --trace=cuda,nvtx,osrt \
-  --stats=true \
-  --force-overwrite true \
-  -o profiling/pi05_libero_reset5_nsys \
-  /root/autodl-tmp/envs/pi05/bin/python -m scripts.run_pi05_action_inference \
-    --source libero \
-    --episode 0 \
-    --sample-count 5 \
-    --mode reset \
-    --warmup 1 \
-    --output outputs/pi05_libero_action_inference_profile_reset5.json
-```
-
-TF32 + `inference_mode()`：
-
-```bash
-MM_EDGE_PI05_TF32=1 \
+# prefix KV cache 默认启用，直接运行
 conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
-  python -m scripts.run_pi05_action_inference \
-    --source libero \
-    --episode 0 \
-    --sample-count 5 \
-    --mode reset \
-    --warmup 1 \
-    --output outputs/pi05_libero_action_inference_reset5_tf32.json
+  python -m mm_edge_infer_accel.cli benchmark \
+    --config configs/vla/pi05_libero.yaml \
+    --sample-count 5 --episode 0 --mode reset --run
 ```
 
-OPT-005 denoise-loop patch：
+### 脚本方式
 
 ```bash
-MM_EDGE_PI05_TF32=1 \
-MM_EDGE_PI05_PATCH_SAMPLE_ACTIONS=1 \
-MM_EDGE_PI05_FUSED_UPDATE_BACKEND=auto \
+# baseline
 conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
-  python -m scripts.run_pi05_action_inference \
-    --source libero \
-    --episode 0 \
-    --sample-count 5 \
-    --mode reset \
-    --warmup 1 \
-    --output outputs/pi05_libero_action_inference_reset5_tf32_patch.json
+  python scripts/run_pi05_action_inference.py \
+    --source libero --episode 0 --sample-count 5 --mode reset --warmup 1
+
+# 关闭 prefix KV cache 做对比
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
+  python scripts/run_pi05_action_inference.py \
+    --disable-prefix-kv-cache \
+    --source libero --episode 0 --sample-count 5 --mode reset --warmup 1
 ```
 
-OPT-006 强制 C++/CUDA fused update，只用于实验对比：
+### Nsight Systems
 
 ```bash
-MM_EDGE_PI05_TF32=1 \
-MM_EDGE_PI05_PATCH_SAMPLE_ACTIONS=1 \
-MM_EDGE_PI05_FUSED_UPDATE_BACKEND=cuda \
-conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
-  python -m scripts.run_pi05_action_inference \
-    --source libero \
-    --episode 0 \
-    --sample-count 5 \
-    --mode reset \
-    --warmup 1 \
-    --output outputs/pi05_libero_action_inference_reset5_tf32_patch_cuda_update.json
+nsys profile --sample=none --trace=cuda,nvtx,osrt --stats=true \
+  --force-overwrite true -o profiling/pi05_libero_reset5_nsys \
+  conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
+    python -m mm_edge_infer_accel.cli benchmark \
+      --config configs/vla/pi05_libero.yaml \
+      --sample-count 5 --episode 0 --mode reset --run
 ```
 
-PyTorch profiler：
+### torch.profiler
 
 ```bash
 conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
-  python -m scripts.profile_pi05_torch \
-    --sample-count 3 \
-    --warmup 1 \
-    --mode reset \
+  python scripts/profile_pi05_torch.py \
+    --sample-count 3 --warmup 1 --mode reset \
     --trace-output profiling/pi05_torch_profile_reset3.json \
     --table-output profiling/pi05_torch_profile_reset3_table.txt \
     --summary-output outputs/pi05_torch_profile_reset3_summary.json

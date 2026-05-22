@@ -24,6 +24,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--warmup", type=int, default=0)
     parser.add_argument("--output")
+    parser.add_argument("--disable-prefix-kv-cache", action="store_true",
+                        help="Disable prefix KV cache optimization")
     return parser.parse_args()
 
 
@@ -36,8 +38,9 @@ def main() -> int:
     else:
         output = "outputs/pi05_libero_action_inference.json"
 
+    enable_prefix_kv_cache = not args.disable_prefix_kv_cache
     if args.source == "synthetic":
-        result = run_synthetic_action(args.model_id, output)
+        result = run_synthetic_action(args.model_id, output, enable_prefix_kv_cache=enable_prefix_kv_cache)
     else:
         result = run_libero_action_inference(
             model_id=args.model_id,
@@ -47,6 +50,7 @@ def main() -> int:
             mode=args.mode,
             warmup=args.warmup,
             output=output,
+            enable_prefix_kv_cache=enable_prefix_kv_cache,
         )
 
     print(json.dumps({k: v for k, v in result.items() if k != "samples"}, indent=2, sort_keys=True))

@@ -44,7 +44,7 @@ def pi05_inference_optimizations() -> dict:
         "compile_model": _env_flag("MM_EDGE_PI05_COMPILE", False),
         "compile_mode": os.environ.get("MM_EDGE_PI05_COMPILE_MODE", "reduce-overhead"),
         "num_inference_steps": int(num_inference_steps) if num_inference_steps else None,
-        "patch_sample_actions": _env_flag("MM_EDGE_PI05_PATCH_SAMPLE_ACTIONS", False),
+        "patch_sample_actions": True,
     }
 
 
@@ -114,7 +114,7 @@ def make_synthetic_batch():
     }
 
 
-def load_policy_and_processors(model_id: str):
+def load_policy_and_processors(model_id: str, enable_prefix_kv_cache: bool = True):
     import torch
     from lerobot.configs.policies import PreTrainedConfig
     from lerobot.policies.pi05 import PI05Policy
@@ -158,12 +158,10 @@ def load_policy_and_processors(model_id: str):
     started = time.perf_counter()
     with nvtx_range("pi05_load_policy"):
         policy = PI05Policy.from_pretrained(model_id, config=config, local_files_only=True).eval()
-    if optimizations["patch_sample_actions"]:
+    if enable_prefix_kv_cache:
         from .pi05_optimizations import apply_pi05_optimizations
 
-        patch_result = apply_pi05_optimizations(
-            policy, enabled=optimizations["patch_sample_actions"]
-        )
+        patch_result = apply_pi05_optimizations(policy, enabled=True)
         optimizations["patch_result"] = patch_result.as_dict()
     config.mm_edge_inference_optimizations = optimizations
     return policy, preprocessor, postprocessor, config, time.perf_counter() - started
@@ -187,10 +185,12 @@ def _raw_batch_from_libero_item(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_synthetic_action(model_id: str, output: str) -> dict:
+def run_synthetic_action(model_id: str, output: str, enable_prefix_kv_cache: bool = True) -> dict:
     set_pi05_cache_env()
     log(f"loading policy {model_id}")
-    policy, preprocessor, postprocessor, config, load_seconds = load_policy_and_processors(model_id)
+    policy, preprocessor, postprocessor, config, load_seconds = load_policy_and_processors(
+        model_id, enable_prefix_kv_cache=enable_prefix_kv_cache
+    )
     log(f"policy loaded in {load_seconds:.2f}s; {cuda_snapshot()}")
 
     preprocess_started = time.perf_counter()
@@ -267,6 +267,7 @@ def run_libero_action_inference(
     mode: str,
     warmup: int,
     output: str,
+    enable_prefix_kv_cache: bool = True,
 ) -> dict:
     set_pi05_cache_env()
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -279,7 +280,9 @@ def run_libero_action_inference(
     log(f"dataset ready: len={len(dataset)}")
 
     log(f"loading policy {model_id}")
-    policy, preprocessor, postprocessor, config, load_seconds = load_policy_and_processors(model_id)
+    policy, preprocessor, postprocessor, config, load_seconds = load_policy_and_processors(
+        model_id, enable_prefix_kv_cache=enable_prefix_kv_cache,
+    )
     log(f"policy loaded in {load_seconds:.2f}s; {cuda_snapshot()}")
     _warmup_policy(policy, preprocessor, dataset, mode, warmup, config.device)
 
