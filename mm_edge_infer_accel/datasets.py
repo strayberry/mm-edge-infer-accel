@@ -10,9 +10,11 @@ def load_ocrbench(sample_count: int, sample_strategy: str = "first"):
         ) from exc
 
     ds = load_dataset("echo840/OCRBench", split="test")
-    if sample_strategy == "first" or sample_count >= len(ds):
+    if sample_strategy == "first":
         return ds.select(range(min(sample_count, len(ds))))
     if sample_strategy == "stratified":
+        if sample_count >= len(ds):
+            return ds.select(range(len(ds)))
         return stratified_select(ds, sample_count, key="question_type")
     raise ValueError(f"Unsupported OCRBench sample strategy: {sample_strategy}")
 

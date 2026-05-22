@@ -87,6 +87,56 @@ def test_cli_profile_prints_nsys_command(capsys):
     assert "nsys profile" in payload["command"]
 
 
+def test_cli_vlm_plan_has_vllm_metrics(capsys):
+    assert cli.main(["benchmark", "--config", "configs/vlm/qwen3vl_4b_bf16.yaml"]) == 0
+
+    payload = _read_stdout_json(capsys)
+
+    assert payload["model_type"] == "vlm"
+    assert "vllm_first_token_latency_ms_mean" in payload["metrics"]
+    assert "vllm_prefill_latency_ms_mean" in payload["metrics"]
+    assert "action_mae" not in payload["metrics"]
+    assert "loop_hz" not in payload["metrics"]
+
+
+def test_cli_benchmark_prints_vla_plan(capsys):
+    assert cli.main(["benchmark", "--config", "configs/vla/pi05_libero.yaml"]) == 0
+
+    payload = _read_stdout_json(capsys)
+
+    assert payload["kind"] == "pi05_lerobot_action_inference"
+    assert payload["model_type"] == "vla"
+    assert payload["status"] == "planned"
+    assert "vllm_first_token_latency_ms_mean" not in payload["metrics"]
+    assert "action_mae" in payload["metrics"]
+    assert "loop_hz" in payload["metrics"]
+
+
+def test_cli_vla_benchmark_accepts_mode_and_episode_overrides(capsys):
+    assert (
+        cli.main(
+            [
+                "benchmark",
+                "--config",
+                "configs/vla/pi05_libero.yaml",
+                "--mode",
+                "reset",
+                "--episode",
+                "3",
+                "--episode",
+                "5",
+            ]
+        )
+        == 0
+    )
+
+    payload = _read_stdout_json(capsys)
+
+    assert payload["config"]["eval"]["mode"] == "reset"
+    assert payload["config"]["eval"]["episodes"] == [3, 5]
+    assert payload["config"]["eval"]["sample_count"] == 100
+
+
 def test_cli_env_check_uses_collector(monkeypatch, capsys):
     monkeypatch.setattr(cli, "collect_environment", lambda: {"python": "test"})
 

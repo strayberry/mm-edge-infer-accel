@@ -36,7 +36,7 @@ dev = [
 mm-edge-infer-accel = "mm_edge_infer_accel.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["mm_edge_infer_accel*"]
+include = ["mm_edge_infer_accel*", "scripts*"]
 
 [tool.ruff]
 line-length = 100

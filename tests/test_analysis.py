@@ -1,7 +1,11 @@
 from mm_edge_infer_accel.vla import (
+    _vla_metrics,
+    _vlm_metrics,
     cosine_similarity,
     mean_absolute_error,
+    benchmark_plan,
 )
+from mm_edge_infer_accel.config import load_config
 from mm_edge_infer_accel.metrics import latency_metrics
 from mm_edge_infer_accel.vlm import _aggregate_metrics
 
@@ -9,6 +13,41 @@ from mm_edge_infer_accel.vlm import _aggregate_metrics
 def test_small_metrics():
     assert mean_absolute_error([1, 2, 3], [1, 1, 5]) == 1.0
     assert round(cosine_similarity([1, 0], [1, 0]), 6) == 1.0
+
+
+def test_vla_metrics_has_correct_fields():
+    metrics = _vla_metrics()
+    assert "action_mae" in metrics
+    assert "action_cosine" in metrics
+    assert "loop_hz" in metrics
+    assert "chunk_predict_hz" in metrics
+    assert "load_seconds" in metrics
+    assert "vllm_first_token_latency_ms_mean" not in metrics
+
+
+def test_vlm_metrics_has_correct_fields():
+    metrics = _vlm_metrics()
+    assert "vllm_first_token_latency_ms_mean" in metrics
+    assert "vllm_decode_latency_ms_mean" in metrics
+    assert "vllm_prefill_latency_ms_mean" in metrics
+    assert "action_mae" not in metrics
+    assert "loop_hz" not in metrics
+
+
+def test_benchmark_plan_pi05_uses_vla_metrics():
+    cfg = load_config("configs/vla/pi05_libero.yaml")
+    plan = benchmark_plan(cfg)
+    assert plan["kind"] == "pi05_lerobot_action_inference"
+    assert "vllm_first_token_latency_ms_mean" not in plan["metrics"]
+    assert "action_mae" in plan["metrics"]
+
+
+def test_benchmark_plan_unknown_family_uses_vlm_metrics():
+    cfg = load_config("configs/vlm/qwen3vl_4b_bf16.yaml")
+    cfg.model.family = "unknown_vla"
+    plan = benchmark_plan(cfg)
+    assert plan["kind"] == "action_prediction_benchmark"
+    assert "vllm_first_token_latency_ms_mean" in plan["metrics"]
 
 
 def test_latency_metrics_include_vllm_internal_timings():

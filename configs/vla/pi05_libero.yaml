@@ -11,6 +11,7 @@ runtime:
   backend: lerobot
   batch_size: 1
   device: cuda
+  enable_prefix_kv_cache: true
 
 eval:
   dataset: HuggingFaceVLA/libero

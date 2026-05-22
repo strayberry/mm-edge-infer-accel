@@ -57,7 +57,7 @@ def _aggregate_metrics(
 def run_benchmark(cfg: ExperimentConfig, output: Optional[str] = None) -> dict:
     if cfg.runtime.backend != "lerobot":
         raise ValueError("Pi0.5 benchmark requires runtime.backend=lerobot")
-    if cfg.eval.dataset != "pi05_load_only":
+    if cfg.eval.dataset == "HuggingFaceVLA/libero":
         return run_libero_action_inference(
             model_id=model_load_path(cfg),
             dataset_id=cfg.eval.dataset,
@@ -66,6 +66,12 @@ def run_benchmark(cfg: ExperimentConfig, output: Optional[str] = None) -> dict:
             mode=cfg.eval.mode,
             warmup=cfg.profile.warmup,
             output=output or str(Path(cfg.eval.output_dir) / f"{cfg.name}.json"),
+            enable_prefix_kv_cache=cfg.runtime.enable_prefix_kv_cache,
+        )
+    if cfg.eval.dataset != "pi05_load_only":
+        raise ValueError(
+            f"Unknown VLA dataset '{cfg.eval.dataset}'. "
+            "Expected 'pi05_load_only' or 'HuggingFaceVLA/libero'."
         )
 
     load_path = model_load_path(cfg)
