@@ -137,6 +137,36 @@ def test_cli_vla_benchmark_accepts_mode_and_episode_overrides(capsys):
     assert payload["config"]["eval"]["sample_count"] == 100
 
 
+def test_cli_vla_benchmark_accepts_closed_loop_overrides(capsys):
+    assert (
+        cli.main(
+            [
+                "benchmark",
+                "--config",
+                "configs/vla/pi05_libero.yaml",
+                "--eval-mode",
+                "closed_loop",
+                "--env-task",
+                "libero_spatial",
+                "--episode-length",
+                "42",
+                "--episode",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    payload = _read_stdout_json(capsys)
+
+    assert payload["kind"] == "pi05_lerobot_closed_loop"
+    assert payload["config"]["eval"]["eval_mode"] == "closed_loop"
+    assert payload["config"]["eval"]["env_task"] == "libero_spatial"
+    assert payload["config"]["eval"]["episode_length"] == 42
+    assert payload["config"]["eval"]["episodes"] == [1]
+    assert "success_rate" in payload["metrics"]
+
+
 def test_cli_env_check_uses_collector(monkeypatch, capsys):
     monkeypatch.setattr(cli, "collect_environment", lambda: {"python": "test"})
 

@@ -97,13 +97,14 @@ def _optimized_sample_actions(
 
     suffix_context = _make_suffix_context(self, prefix_pad_masks)
     dt = -1.0 / num_steps
+    timestep_cache = _make_timestep_cache(num_steps, bsize, device, dt)
 
     x_t = noise
     for step in range(num_steps):
-        timestep = torch.full((bsize,), 1.0 + step * dt, device=device)
+        timestep = timestep_cache[step]
         v_t = _denoise_step_cached(
             self,
-        past_key_values=copy.deepcopy(past_key_values),
+            past_key_values=copy.deepcopy(past_key_values),
             x_t=x_t,
             timestep=timestep,
             suffix_context=suffix_context,
@@ -114,6 +115,12 @@ def _optimized_sample_actions(
             self.rtc_processor.track(time=float(timestep[0].item()), x_t=x_t, v_t=v_t)
 
     return x_t
+
+
+def _make_timestep_cache(num_steps: int, bsize: int, device, dt: float):
+    steps = torch.arange(num_steps, dtype=torch.float32, device=device)
+    values = 1.0 + steps * dt
+    return values[:, None].expand(num_steps, bsize)
 
 
 def _make_suffix_context(model, prefix_pad_masks):

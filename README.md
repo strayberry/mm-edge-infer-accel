@@ -133,27 +133,47 @@ The VLA path uses native LeRobot for Pi0.5 instead of forcing it through vLLM. T
 - `queue` mode: keep Pi0.5's internal action queue and measure realistic control-loop action output.
 - Action MAE, cosine similarity, latency, loop Hz, and chunk prediction count.
 
-Pi0.5 real LIBERO action inference is intentionally script-backed for now; it is not yet wired into `python -m mm_edge_infer_accel.cli benchmark`.
+Pi0.5 real LIBERO action inference is available through both `scripts/run_pi05_action_inference.py` and `python -m mm_edge_infer_accel.cli benchmark`.
 
 ## Installation
 
-Use separate environments. The VLM/vLLM stack, quantization stack, and Pi0.5/LeRobot stack have different dependency constraints.
+Use two runtime environments. The Pi0.5 environment also handles normal repo development and tests; the vLLM stack stays isolated because it has a different Torch/Transformers/CUDA dependency set.
+
+Current validated environments:
+
+| Environment | Purpose |
+| --- | --- |
+| `/root/autodl-tmp/envs/pi05` | General development, tests, reports, quantization helpers, Pi0.5/LeRobot/LIBERO runs |
+| `/root/autodl-tmp/envs/mm-edge-infer-accel-vllm` | vLLM/Qwen3-VL benchmark runs |
+
+The previous `/root/miniconda3/envs/mm-edge-infer-accel` development environment has been removed. Use `/root/autodl-tmp/envs/pi05` for non-vLLM commands.
 
 General development and tests:
 
 ```bash
-python -m pip install -e ".[dev]"
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
+  python -m pip install -e ".[dev]"
 ```
 
-Quantization helpers:
+Quantization helpers, if needed in the Pi0.5/general environment:
 
 ```bash
-python -m pip install -e ".[quant]"
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
+  python -m pip install -e ".[quant]"
 ```
 
 vLLM benchmark environment:
 
 ```bash
+conda run --no-capture-output -p /root/autodl-tmp/envs/mm-edge-infer-accel-vllm \
+  python -m pip install -e ".[vllm]"
+```
+
+For an already activated environment, the equivalent editable installs are:
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pip install -e ".[quant]"
 python -m pip install -e ".[vllm]"
 ```
 
@@ -165,7 +185,7 @@ Optional dependency groups are defined in `pyproject.toml`:
 | `quant` | Transformers, datasets, LLM Compressor, bitsandbytes, Qwen-VL utilities |
 | `vllm` | vLLM and VLM benchmark dependencies |
 
-Pi0.5 should be installed in a separate LeRobot-compatible environment. The current validated stack uses Python 3.12 and a newer Transformers/OpenPI-compatible LeRobot path.
+Pi0.5 is installed in the LeRobot-compatible `/root/autodl-tmp/envs/pi05` environment. The current validated stack uses Python 3.12 and a newer Transformers/OpenPI-compatible LeRobot path.
 
 ## Common Commands
 
@@ -178,7 +198,8 @@ export VLLM_USE_FLASHINFER_SAMPLER=0
 Print a benchmark plan without executing:
 
 ```bash
-python -m mm_edge_infer_accel.cli benchmark \
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
+  python -m mm_edge_infer_accel.cli benchmark \
   --config configs/vlm/qwen3vl_4b_awq_local.yaml
 ```
 
@@ -186,7 +207,8 @@ Run a VLM benchmark:
 
 ```bash
 VLLM_USE_FLASHINFER_SAMPLER=0 \
-python -m mm_edge_infer_accel.cli benchmark \
+conda run --no-capture-output -p /root/autodl-tmp/envs/mm-edge-infer-accel-vllm \
+  python -m mm_edge_infer_accel.cli benchmark \
   --config configs/vlm/qwen3vl_4b_awq_local.yaml \
   --concurrency 8 \
   --run \
@@ -197,7 +219,8 @@ Run a full first-1000 OCRBench evaluation without a separate YAML:
 
 ```bash
 VLLM_USE_FLASHINFER_SAMPLER=0 \
-python -m mm_edge_infer_accel.cli benchmark \
+conda run --no-capture-output -p /root/autodl-tmp/envs/mm-edge-infer-accel-vllm \
+  python -m mm_edge_infer_accel.cli benchmark \
   --config configs/vlm/qwen3vl_4b_awq_local.yaml \
   --sample-count 1000 \
   --sample-strategy first \
@@ -210,7 +233,8 @@ Run a max-token or max-pixel ablation without a separate YAML:
 
 ```bash
 VLLM_USE_FLASHINFER_SAMPLER=0 \
-python -m mm_edge_infer_accel.cli benchmark \
+conda run --no-capture-output -p /root/autodl-tmp/envs/mm-edge-infer-accel-vllm \
+  python -m mm_edge_infer_accel.cli benchmark \
   --config configs/vlm/qwen3vl_4b_bf16.yaml \
   --sample-count 100 \
   --sample-strategy stratified \
@@ -223,7 +247,8 @@ python -m mm_edge_infer_accel.cli benchmark \
 Generate an Nsight Systems command:
 
 ```bash
-python -m mm_edge_infer_accel.cli profile \
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
+  python -m mm_edge_infer_accel.cli profile \
   --tool nsys \
   --config configs/vlm/qwen3vl_4b_awq_local.yaml
 ```
@@ -231,7 +256,8 @@ python -m mm_edge_infer_accel.cli profile \
 Run Qwen3-VL-4B LLM Compressor quantization:
 
 ```bash
-python scripts/quant_qwen3vl4b_llmcompressor.py \
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
+  python scripts/quant_qwen3vl4b_llmcompressor.py \
   --method gptq \
   --calib-source docvqa \
   --docvqa-dataset-id lmms-lab/DocVQA \
@@ -247,7 +273,8 @@ Run Pi0.5 LIBERO action inference:
 
 ```bash
 HF_HUB_DISABLE_XET=1 \
-python scripts/run_pi05_action_inference.py \
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
+  python scripts/run_pi05_action_inference.py \
   --source libero \
   --episode 0 \
   --sample-count 100 \
@@ -259,7 +286,8 @@ python scripts/run_pi05_action_inference.py \
 Run tests:
 
 ```bash
-python -m pytest tests/
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05 \
+  python -m pytest tests/
 ```
 
 ## Reports

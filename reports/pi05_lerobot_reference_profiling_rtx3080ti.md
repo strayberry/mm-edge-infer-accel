@@ -11,6 +11,7 @@
 - 模型为 bf16 精度，TF32 对其无影响。
 - `torch.inference_mode()` 已默认启用。
 - prefix KV cache 优化实测有效：300 frames reset 模式下 action mean 从 0.4254s 降到 0.3924s（-7.8%）。
+- closed-loop 阶段性评测已完成 `libero_spatial` task `0,1,2` × 3 episodes 的 prefix on/off 对比，结果见 `reports/pi05_prefix_kv_cache_optimization_rtx3080ti.md`。
 - `torch.compile` 实测无收益。
 - C++/CUDA `fused_denoise_update` 已移除（小 tensor 上无收益）。
 

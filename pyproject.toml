@@ -9,6 +9,7 @@ description = "Multimodal edge inference acceleration, benchmarking, and deploym
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "numpy",
   "pyyaml>=6.0",
   "torch",
   "tqdm>=4.66",

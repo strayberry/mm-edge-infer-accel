@@ -27,6 +27,12 @@ def _apply_benchmark_overrides(cfg: Any, args: argparse.Namespace) -> None:
         cfg.model.max_pixels = args.max_pixels
     if args.mode is not None:
         cfg.eval.mode = args.mode
+    if args.eval_mode is not None:
+        cfg.eval.eval_mode = args.eval_mode
+    if args.env_task is not None:
+        cfg.eval.env_task = args.env_task
+    if args.episode_length is not None:
+        cfg.eval.episode_length = args.episode_length
     if args.episode is not None:
         cfg.eval.episodes = args.episode
     validate_config(cfg)
@@ -50,6 +56,11 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--max-pixels", type=int)
     bench.add_argument("--mode", choices=["reset", "queue"],
                        help="VLA action inference mode")
+    bench.add_argument("--eval-mode", choices=["action_inference", "closed_loop"],
+                       help="VLA evaluation mode")
+    bench.add_argument("--env-task", help="LIBERO task suite for closed-loop evaluation")
+    bench.add_argument("--episode-length", type=int,
+                       help="Maximum closed-loop rollout steps")
     bench.add_argument("--episode", type=int, action="append",
                        help="VLA episode(s) to run (can be specified multiple times)")
 
