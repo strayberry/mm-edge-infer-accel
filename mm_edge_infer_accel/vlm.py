@@ -67,10 +67,19 @@ def _warmup_model(runner: VLLMRunner, samples, warmup_count: int) -> float:
     return time.perf_counter() - started
 
 
+def _sample_answers(sample: dict) -> list[str]:
+    answers = sample.get("answers", sample.get("answer"))
+    if answers is None:
+        return []
+    if isinstance(answers, str):
+        return [answers]
+    return list(answers)
+
+
 def _run_one_sample(runner: VLLMRunner, sample: dict, max_new_tokens: int) -> dict:
     image = sample["image"].convert("RGB")
     question = sample["question"]
-    answers = list(sample["answers"])
+    answers = _sample_answers(sample)
     timings: dict = {}
 
     with timed_stage("preprocess", timings):
@@ -113,7 +122,7 @@ def _prepare_sample(runner: VLLMRunner, sample: dict) -> dict:
         "dataset": sample.get("dataset"),
         "question_type": sample.get("question_type"),
         "question": question,
-        "answers": list(sample["answers"]),
+        "answers": _sample_answers(sample),
         "image": image,
         "prompt": prompt,
         "input_tokens": input_tokens,
