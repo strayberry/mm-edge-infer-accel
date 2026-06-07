@@ -7,7 +7,7 @@ from mm_edge_infer_accel.vla import (
 )
 from mm_edge_infer_accel.config import load_config
 from mm_edge_infer_accel.metrics import latency_metrics
-from mm_edge_infer_accel.vlm import _aggregate_metrics
+from mm_edge_infer_accel.vlm import _aggregate_metrics, _sample_answers
 
 
 def test_small_metrics():
@@ -48,6 +48,12 @@ def test_benchmark_plan_unknown_family_uses_vlm_metrics():
     plan = benchmark_plan(cfg)
     assert plan["kind"] == "action_prediction_benchmark"
     assert "vllm_first_token_latency_ms_mean" in plan["metrics"]
+
+
+def test_vlm_sample_answers_accepts_ocrbench_answer_field():
+    assert _sample_answers({"answer": ["CENTRE"]}) == ["CENTRE"]
+    assert _sample_answers({"answer": "CENTRE"}) == ["CENTRE"]
+    assert _sample_answers({"answers": ["CENTRE", "CENTER"]}) == ["CENTRE", "CENTER"]
 
 
 def test_latency_metrics_include_vllm_internal_timings():

@@ -1,246 +1,199 @@
 # Multimodal Edge Inference Acceleration
 
-This repository is a research and engineering toolkit for edge-oriented multimodal inference. It benchmarks how VLM and VLA models behave under constrained GPU memory, low-latency deployment requirements, and robotics control-loop constraints.
-
-The project is not a production server. It is organized around reproducible experiments, reports, and thin scripts that make before/after optimization results explicit.
+This repository collects edge-inference experiments for multimodal LLM and VLA workloads.
+The current focus is practical latency, memory, and accuracy trade-offs on constrained GPUs
+such as RTX 3080 Ti and Jetson AGX Orin.
 
 ## Current Tracks
 
-| Track | Runtime | Status | Main output |
-| --- | --- | --- | --- |
-| Qwen3-VL VLM serving | vLLM | Active baseline complete | OCRBench accuracy, latency, concurrency |
-| Pi0.5 LeRobot reference | LeRobot / PyTorch | Reference profiling complete | LIBERO action latency, reset vs queue, prefix KV cache |
-| Pi0.5 FlashRT / Orin | FlashRT | Orin validation complete | BF16/cache2/INT8/vitpack action-similarity results |
-| TensorRT side tests | TensorRT / TensorRT-LLM | Side experiments only | Visual-module and small text-only feasibility checks |
-
-Main rule: keep VLM serving experiments and VLA control-loop experiments separate. They use different runtimes, datasets, metrics, and success criteria.
+| Track | Scope | Status |
+| --- | --- | --- |
+| Qwen3-VL-4B VLM | vLLM BF16 / AWQ / GPTQ on OCRBench, concurrency curve, latency and memory | Mostly complete |
+| Pi0.5 LeRobot reference | LIBERO action inference, reset vs queue, prefix KV cache, PyTorch/Nsight profiling | Mostly complete |
+| Pi0.5 FlashRT / Orin | BF16, cache2, INT8, vitpack ablations, 300-frame action similarity | Complete |
+| Pi0.5 closed-loop | LIBERO env success rate, control Hz, episode length, policy/env latency | Current evaluation track |
+| TensorRT side tests | Qwen3-VL visual+projector export and Qwen3-0.6B TensorRT-LLM text-only test | Side track, not the main project path |
 
 ## Repository Layout
 
 ```text
-configs/
-  vlm/                         Active VLM benchmark YAML configs
-  vla/                         Active VLA / LeRobot benchmark YAML configs
-
 mm_edge_infer_accel/
-  cli.py                       CLI dispatch for benchmark/quantize/profile/env-check
-  config.py                    YAML loading and validation
-  common.py                    Shared quantization/profile helpers
-  datasets.py                  OCRBench loading and sampling helpers
-  env.py                       Environment and package inspection
-  metrics.py                   Shared latency and accuracy helpers
-  profiling.py                 NVTX helpers and profiler command generation
-  vlm.py                       VLM benchmark orchestration
-  vla.py                       VLA dispatch and action metrics
-  vla_lerobot.py               LeRobot-backed Pi0.5 benchmark path
-  pi05_runtime.py              Pi0.5 policy loading and LIBERO action inference
-  pi05_optimizations.py        Pi0.5 prefix KV cache optimization patch
-  runners/vllm_runner.py       vLLM model loading and generation wrapper
-  quantization/                Qwen3-VL calibration and LLM Compressor helpers
-
-scripts/
-  quant_qwen3vl4b_llmcompressor.py
-  run_pi05_action_inference.py
-  export_libero_npz.py
-  profile_pi05_torch.py
-  sweep_pi05_inference_steps.py
-  analyze_qwen3vl4b_maxnew64_by_category.py
-
-tests/                         CPU-friendly unit tests
-reports/                       Completed experiment reports
-outputs/                       Local benchmark JSON outputs; gitignored
-profiling/                     Local profiler artifacts; gitignored
+├── cli.py                 CLI dispatch for benchmark, quantize, profile, env-check
+├── config.py              YAML loading, experiment dataclasses, validation
+├── common.py              quantization_plan() and profile_command()
+├── datasets.py            OCRBench loading and stratified sampling
+├── env.py                 GPU/CUDA/package environment inspection
+├── metrics.py             answer matching and latency metrics
+├── profiling.py           timing, NVTX ranges, GPU memory snapshots
+├── vlm.py                 VLM benchmark orchestration through vLLM
+├── vla.py                 VLA dispatch and action metrics
+├── vla_lerobot.py         LeRobot-backed VLA dispatch
+├── pi05_runtime.py        Pi0.5 policy loading and LIBERO action inference
+├── pi05_optimizations.py  Prefix KV cache optimization for Pi0.5 denoise loop
+├── runners/
+│   └── vllm_runner.py     VLLMRunner load, prompt build, generate, batch generate
+└── quantization/
+    ├── qwen3vl_calibration.py
+    └── qwen3vl_llmcompressor.py
 ```
 
-## Config Model
+Main experiment configs live under `configs/vlm/` and `configs/vla/`. Historical and ablation
+configs live under `configs/archive/`.
 
-Experiments are YAML-driven. `model.family` determines workload type and allowed backend:
+## Environments
 
-| Model family | Workload | Backend |
-| --- | --- | --- |
-| `qwen3-vl`, `smolvlm2` | VLM | `vllm` |
-| `pi0_fast`, `pi05` | VLA | `lerobot` |
+Use separate environments for normal repo work, vLLM, and TensorRT-LLM side tests.
 
-Active configs:
+| Purpose | Environment |
+| --- | --- |
+| General tests and Pi0.5 LeRobot runs | `/root/autodl-tmp/envs/pi05` when present |
+| vLLM benchmarks | `/root/autodl-tmp/envs/mm-edge-infer-accel-vllm` |
+| TensorRT-LLM side tests | `/root/autodl-tmp/envs/qwen3vl-trtllm` |
 
-```text
-configs/vlm/qwen3vl_4b_bf16.yaml
-configs/vlm/qwen3vl_4b_awq_local.yaml
-configs/vlm/qwen3vl_4b_gptq_local.yaml
-configs/vlm/smolvlm2_2b_fp32.yaml
-configs/vla/pi05_libero.yaml
-```
-
-Historical and ablation configs are intentionally kept out of the active config directories. Prefer CLI overrides for sample count, max new tokens, max pixels, concurrency, Pi0.5 mode, and episodes.
+The old `/root/miniconda3/envs/mm-edge-infer-accel` environment has been removed. If the Pi0.5
+environment is not present on a host, recreate it before running LeRobot/Pi0.5 commands. Always set
+`VLLM_USE_FLASHINFER_SAMPLER=0` for vLLM processes in this project.
 
 ## CLI
 
 ```bash
-python -m mm_edge_infer_accel.cli <command> [options]
+python -m mm_edge_infer_accel.cli <command>   [--config <yaml>]   [--concurrency <N>]   [--sample-count <N>]   [--sample-strategy first|stratified]   [--max-new-tokens <N>]   [--max-pixels <N>]   [--mode reset|queue]   [--episode <N> ...]   [--run]   [--dry-run]   [--output <json>]
 ```
 
 Commands:
 
-- `benchmark`: print or run a config-driven benchmark.
-- `quantize`: print the config-driven quantization plan.
-- `profile`: generate an `nsys` or `ncu` command string; it does not run the profiler.
-- `env-check`: print system, GPU, CUDA, and package information.
+- `benchmark`: run an experiment only when `--run` is passed; otherwise print the plan.
+- `quantize`: print the config-driven plan. Use `scripts/quant_qwen3vl4b_llmcompressor.py` for the retained AWQ/GPTQ path.
+- `profile`: generate an `nsys`/`ncu` command string; it does not run the profiler.
+- `env-check`: print local GPU/CUDA/package information.
 
-Common benchmark options:
+Config validation maps model families to experiment type and backend:
 
-```text
---config <yaml>
---run
---output <json>
---concurrency <N>
---sample-count <N>
---sample-strategy first|stratified
---max-new-tokens <N>
---max-pixels <N>
---mode reset|queue
---episode <N>
+| Family | Type | Backend |
+| --- | --- | --- |
+| `qwen3-vl`, `smolvlm2` | `vlm` | `vllm` |
+| `pi0_fast`, `pi05` | `vla` | `lerobot` |
+
+Using the wrong backend raises `ValueError` during config validation.
+
+## Qwen3-VL Benchmarks
+
+Canonical vLLM command:
+
+```bash
+VLLM_USE_FLASHINFER_SAMPLER=0 conda run --no-capture-output -p /root/autodl-tmp/envs/mm-edge-infer-accel-vllm   python -m mm_edge_infer_accel.cli benchmark   --config configs/vlm/qwen3vl_4b_awq_local.yaml   --concurrency 8   --run   --output outputs/qwen3vl_4b_awq_c8.json
 ```
 
-## Environment Notes
+Current Qwen3-VL-4B constraints and defaults:
 
-Use separate environments for incompatible runtime stacks.
+- RTX 3080 Ti 12GB uses `max_model_len: 1024` for all 4B comparison runs.
+- `mm_processor_kwargs.truncation: false` and `model.max_pixels: 602112` are required for image token count consistency.
+- Main completed curve: BF16 / AWQ / GPTQ at concurrency `1, 2, 4, 8, 16, 32`.
+- Current deployment-style default: AWQ or GPTQ at `concurrency=8`. BF16 is the quality baseline.
 
-Recommended local environments on this machine:
+## Pi0.5 Benchmarks
 
-| Purpose | Environment |
+Pi0.5 real LIBERO action inference is available through both the script and CLI.
+
+Script form:
+
+```bash
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05   python scripts/run_pi05_action_inference.py   --model-id /root/autodl-tmp/hf_cache/hub/models--lerobot--pi05_libero_finetuned_v044/snapshots/<snapshot>   --source libero   --mode reset   --episode 0   --output outputs/pi05_libero_episode0_reset.json
+```
+
+CLI form:
+
+```bash
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05   python -m mm_edge_infer_accel.cli benchmark   --config configs/vla/pi05_libero.yaml   --mode reset   --episode 0   --run   --output outputs/pi05_libero_episode0_reset.json
+```
+
+Useful Pi0.5 environment variables:
+
+| Variable | Purpose |
 | --- | --- |
-| vLLM benchmarks and current unit tests | `/root/autodl-tmp/envs/mm-edge-infer-accel-vllm` |
-| TensorRT-LLM side tests | `/root/autodl-tmp/envs/qwen3vl-trtllm` |
-| Pi0.5 / LeRobot reference | Create or use a LeRobot-compatible env on the target machine |
+| `MM_EDGE_PI05_COMPILE` | Optional `torch.compile` path; default false and previously showed no benefit |
+| `MM_EDGE_PI05_COMPILE_MODE` | Compile mode, default `reduce-overhead` |
+| `MM_EDGE_PI05_NUM_INFERENCE_STEPS` | Override denoising step count |
+| `MM_EDGE_PI05_TF32` | Legacy flag; Pi0.5 is bf16, so this does not change inference behavior |
 
-The older `/root/miniconda3/envs/mm-edge-infer-accel` env is no longer used. The previously documented `/root/autodl-tmp/envs/pi05` env may need to be recreated before Pi0.5 LeRobot runs on this host.
+The prefix KV cache optimization is enabled by default through `runtime.enable_prefix_kv_cache`.
+It replaces `model.sample_actions` and caches the visual+text prefix KV cache once, so denoising
+steps only process the action/noise suffix.
 
-Always disable the FlashInfer sampler for current vLLM runs:
+## TensorRT Side Tests
 
-```bash
-export VLLM_USE_FLASHINFER_SAMPLER=0
-```
+These scripts are exploratory and are not the main Qwen3-VL project path.
 
-Install editable extras as needed:
-
-```bash
-python -m pip install -e ".[dev]"
-python -m pip install -e ".[vllm]"
-python -m pip install -e ".[quant]"
-```
-
-## Qwen3-VL VLM Benchmarks
-
-The VLM path currently supports `echo840/OCRBench` through the `datasets` library.
-
-Supported sampling modes:
-
-- `first`: first `N` samples.
-- `stratified`: round-robin by `question_type`.
-
-Current Qwen3-VL-4B constraint on RTX 3080 Ti 12GB:
-
-```yaml
-runtime:
-  max_model_len: 1024
-  mm_processor_kwargs:
-    truncation: false
-model:
-  max_pixels: 602112
-```
-
-`max_model_len: 2048` does not fit BF16 reliably on the 12GB card. `truncation: false` avoids local processor truncation changing the image-token count.
-
-Run a Qwen3-VL benchmark:
+Qwen3-VL visual + merger/projector ONNX export:
 
 ```bash
-VLLM_USE_FLASHINFER_SAMPLER=0 python -m mm_edge_infer_accel.cli benchmark   --config configs/vlm/qwen3vl_4b_awq_local.yaml   --sample-count 100   --sample-strategy stratified   --concurrency 8   --run   --output outputs/qwen3vl_4b_awq_stratified100_c8.json
+conda run --no-capture-output -p /root/autodl-tmp/envs/qwen3vl-trtllm   python scripts/export_qwen3vl_vit_projector_onnx.py --help
 ```
 
-Run a full first-1000 accuracy pass:
+Qwen3-0.6B text-only TensorRT-LLM engine side test:
 
 ```bash
-VLLM_USE_FLASHINFER_SAMPLER=0 python -m mm_edge_infer_accel.cli benchmark   --config configs/vlm/qwen3vl_4b_gptq_local.yaml   --sample-count 1000   --sample-strategy first   --concurrency 8   --run   --output outputs/qwen3vl_4b_gptq_first1000_c8.json
+conda run --no-capture-output -p /root/autodl-tmp/envs/qwen3vl-trtllm   python scripts/export_qwen3_0_6b_trtllm_engine.py --help
+
+conda run --no-capture-output -p /root/autodl-tmp/envs/qwen3vl-trtllm   python scripts/run_qwen3_0_6b_trtllm_benchmark.py --help
 ```
 
-Run Qwen3-VL-4B LLM Compressor quantization:
-
-```bash
-python scripts/quant_qwen3vl4b_llmcompressor.py   --method gptq   --calib-source docvqa   --docvqa-dataset-id lmms-lab/DocVQA   --docvqa-config DocVQA   --docvqa-split validation   --max-calib-samples 128   --max-calib-seq-len 1024   --calib-max-pixels 602112   --output /path/to/Qwen3-VL-4B-Instruct-GPTQ-local
-```
-
-## Pi0.5 / LIBERO Benchmarks
-
-Pi0.5 uses native LeRobot/PyTorch, not vLLM.
-
-Implemented paths:
-
-- CLI benchmark through `configs/vla/pi05_libero.yaml`.
-- Thin script entrypoint through `scripts/run_pi05_action_inference.py`.
-- `reset` mode: reset the action queue and force a new chunk prediction per frame.
-- `queue` mode: keep the internal action queue and measure realistic control-loop output.
-- Prefix KV cache optimization controlled by `runtime.enable_prefix_kv_cache`.
-
-Run Pi0.5 LIBERO through the CLI:
-
-```bash
-HF_HUB_DISABLE_XET=1 python -m mm_edge_infer_accel.cli benchmark   --config configs/vla/pi05_libero.yaml   --mode queue   --episode 0   --sample-count 100   --run   --output outputs/pi05_libero_ep0_queue_100.json
-```
-
-Run the thin script directly:
-
-```bash
-HF_HUB_DISABLE_XET=1 python scripts/run_pi05_action_inference.py   --model-id /path/to/pi05_libero_finetuned_v044   --source libero   --episode 0   --sample-count 100   --mode queue   --warmup 3   --output outputs/pi05_libero_action_inference_100_queue.json
-```
+For Qwen3-VL, the retained practical route is vLLM for the decoder plus optional TensorRT for the
+visual+merger/projector module. Full TensorRT-LLM engine backend for Qwen3-VL is not the current
+mainline in this repo.
 
 ## Profiling
 
-Generate an Nsight Systems command:
+The code contains NVTX ranges for the major runtime stages:
+
+- VLM: `vlm_vllm_load_model`, `vlm_vllm_ocrbench_loop`, `vlm_vllm_warmup`, `preprocess`, `generate`, `decode`
+- Pi0.5: `pi05_load_config_processors`, `pi05_load_policy`, `pi05_warmup`, `pi05_dataset_getitem`, `pi05_preprocess`, `pi05_policy_reset`, `pi05_select_action`, `pi05_postprocess`, `pi05_action_metrics`
+
+Generate profiler command strings with:
 
 ```bash
-python -m mm_edge_infer_accel.cli profile   --tool nsys   --config configs/vlm/qwen3vl_4b_awq_local.yaml
+python -m mm_edge_infer_accel.cli profile --config <yaml>
 ```
 
-Generate an Nsight Compute command:
+For Pi0.5 torch profiling, use:
 
 ```bash
-python -m mm_edge_infer_accel.cli profile   --tool ncu   --config configs/vlm/qwen3vl_4b_awq_local.yaml
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05   python scripts/profile_pi05_torch.py --help
 ```
-
-The CLI only prints profiler commands. Run them manually after checking permissions and target-device support.
 
 ## Reports
 
-Useful report entry points:
+Key reports:
 
-| Report | Purpose |
-| --- | --- |
-| `reports/qwen3vl_4b_vllm_bf16_comparison.md` | Qwen3-VL-4B BF16 comparison notes |
-| `reports/qwen3vl_4b_vllm_concurrency_curve.md` | BF16/AWQ/GPTQ concurrency curve |
-| `reports/pi05_lerobot_reference_profiling_rtx3080ti.md` | Pi0.5 reference profiling on RTX 3080 Ti |
-| `reports/pi05_prefix_kv_cache_optimization_rtx3080ti.md` | Pi0.5 prefix KV cache optimization result |
-| `reports/pi05_orin_flashrt_experiment_report.md` | Pi0.5 FlashRT / Jetson AGX Orin validation |
+- `reports/qwen3vl_4b_vllm_bf16_comparison.md`
+- `reports/qwen3vl_4b_vllm_concurrency_curve.md`
+- `reports/qwen3vl_2b_bf16_nsys_stratified100.md`
+- `reports/pi05_lerobot_reference_profiling_rtx3080ti.md`
+- `reports/pi05_prefix_kv_cache_optimization_rtx3080ti.md`
+- `reports/pi05_orin_flashrt_experiment_report.md`
+- `reports/qwen3vl_vit_projector_tensorrt_result.md`
+- `reports/qwen3_0_6b_tensorrt_llm_result.md`
 
-Add reports only after the underlying experiment has been run and the output/profiling artifact exists. `outputs/` and `profiling/` are local artifacts and are gitignored.
+Current takeaways:
 
-## Current Takeaways
-
-- Qwen3-VL-4B BF16 is the quality baseline, but AWQ/GPTQ are the practical 12GB deployment candidates.
-- For Qwen3-VL-4B serving-style runs on RTX 3080 Ti, the current default comparison point is `concurrency=8`.
-- Pi0.5 reference inference benefits from prefix KV cache, but its PyTorch/LeRobot path is still not the low-latency edge deployment path.
-- Pi0.5 FlashRT / Orin validation showed `cache2` is the main retained optimization direction; token pooling/vitpack-style spatial compression is not the mainline.
-- TensorRT artifacts built on RTX should be treated as local validation only. Jetson deployment requires rebuilding under the target JetPack/TensorRT version.
+- Qwen3-VL-4B on RTX 3080 Ti should use AWQ/GPTQ with vLLM for serving-style runs.
+- Qwen3-VL visual TensorRT is useful as a side optimization target, but the decoder remains vLLM in the practical path.
+- Pi0.5 LeRobot reference benefits from prefix KV cache by reducing repeated prefix encoding inside the denoise loop.
+- Pi0.5 FlashRT/Orin `cache2` is the retained runtime optimization; vitpack/token pooling is not retained as a correctness-preserving path.
 
 ## Testing
 
-Current available test environment on this machine:
+Run unit tests with the available project environment:
 
 ```bash
 conda run --no-capture-output -p /root/autodl-tmp/envs/mm-edge-infer-accel-vllm   python -m pytest tests/
 ```
 
-Generic command if dependencies are installed in the active environment:
+If the Pi0.5/general environment is present, it can also run the test suite:
 
 ```bash
-python -m pytest tests/
+conda run --no-capture-output -p /root/autodl-tmp/envs/pi05   python -m pytest tests/
 ```
+
+Expected coverage is lightweight and CPU-compatible for normal unit tests. GPU-heavy benchmark
+outputs go under `outputs/`, which is gitignored.

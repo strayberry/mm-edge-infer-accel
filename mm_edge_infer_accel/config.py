@@ -67,6 +67,9 @@ class EvalConfig:
     output_dir: str = "outputs"
     episodes: list[int] = field(default_factory=lambda: [0])
     mode: str = "reset"
+    eval_mode: str = "action_inference"
+    env_task: str = "libero_10"
+    episode_length: int | None = None
 
 
 @dataclass
@@ -143,6 +146,12 @@ def validate_config(cfg: ExperimentConfig) -> None:
         raise ValueError("eval.sample_strategy must be one of: first, stratified")
     if cfg.eval.mode not in {"reset", "queue"}:
         raise ValueError("eval.mode must be one of: reset, queue")
+    if cfg.eval.eval_mode not in {"action_inference", "closed_loop"}:
+        raise ValueError("eval.eval_mode must be one of: action_inference, closed_loop")
+    if not cfg.eval.env_task:
+        raise ValueError("eval.env_task must not be empty")
+    if cfg.eval.episode_length is not None and cfg.eval.episode_length < 1:
+        raise ValueError("eval.episode_length must be >= 1")
     if cfg.runtime.backend not in {"vllm", "pytorch", "lerobot", "transformers"}:
         raise ValueError("runtime.backend must be one of: vllm, pytorch, lerobot, transformers")
     family = cfg.model.family.lower()

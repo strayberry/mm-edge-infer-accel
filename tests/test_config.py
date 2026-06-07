@@ -34,6 +34,9 @@ def test_pi05_libero_config_runs_action_inference():
     assert cfg.eval.episodes == [0, 1, 2]
     assert cfg.eval.sample_count == 100
     assert cfg.eval.mode == "queue"
+    assert cfg.eval.eval_mode == "action_inference"
+    assert cfg.eval.env_task == "libero_10"
+    assert cfg.eval.episode_length is None
     assert cfg.profile.warmup == 3
     assert cfg.runtime.enable_prefix_kv_cache is True
 
@@ -67,6 +70,35 @@ def test_pi05_lerobot_benchmark_dispatches_libero_action_inference(monkeypatch):
         "sample_count": 100,
         "mode": "queue",
         "warmup": 3,
+        "output": "outputs/test.json",
+        "enable_prefix_kv_cache": True,
+    }
+
+
+def test_pi05_lerobot_benchmark_dispatches_libero_closed_loop(monkeypatch):
+    cfg = load_config("configs/vla/pi05_libero.yaml")
+    cfg.eval.eval_mode = "closed_loop"
+    cfg.eval.env_task = "libero_spatial"
+    cfg.eval.episode_length = 17
+    received = {}
+
+    def fake_run_libero_closed_loop_inference(**kwargs):
+        received.update(kwargs)
+        return {"source": "libero_closed_loop"}
+
+    monkeypatch.setattr(
+        vla_lerobot, "run_libero_closed_loop_inference", fake_run_libero_closed_loop_inference
+    )
+
+    assert vla_lerobot.run_benchmark(cfg, output="outputs/test.json") == {
+        "source": "libero_closed_loop"
+    }
+    assert received == {
+        "model_id": "lerobot/pi05_libero_finetuned_v044",
+        "env_task": "libero_spatial",
+        "task_ids": [0, 1, 2],
+        "episodes_per_task": 100,
+        "episode_length": 17,
         "output": "outputs/test.json",
         "enable_prefix_kv_cache": True,
     }

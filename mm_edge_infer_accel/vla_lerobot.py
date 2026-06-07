@@ -7,7 +7,11 @@ from typing import Optional
 
 from .config import ExperimentConfig, config_to_dict, model_load_path
 from .env import collect_environment
-from .pi05_runtime import load_policy_only, run_libero_action_inference
+from .pi05_runtime import (
+    load_policy_only,
+    run_libero_action_inference,
+    run_libero_closed_loop_inference,
+)
 from .profiling import gpu_memory_snapshot_mb, nvtx_range
 
 
@@ -58,6 +62,17 @@ def run_benchmark(cfg: ExperimentConfig, output: Optional[str] = None) -> dict:
     if cfg.runtime.backend != "lerobot":
         raise ValueError("Pi0.5 benchmark requires runtime.backend=lerobot")
     if cfg.eval.dataset == "HuggingFaceVLA/libero":
+        result_path = output or str(Path(cfg.eval.output_dir) / f"{cfg.name}.json")
+        if cfg.eval.eval_mode == "closed_loop":
+            return run_libero_closed_loop_inference(
+                model_id=model_load_path(cfg),
+                env_task=cfg.eval.env_task,
+                task_ids=cfg.eval.episodes,
+                episodes_per_task=cfg.eval.sample_count,
+                episode_length=cfg.eval.episode_length,
+                output=result_path,
+                enable_prefix_kv_cache=cfg.runtime.enable_prefix_kv_cache,
+            )
         return run_libero_action_inference(
             model_id=model_load_path(cfg),
             dataset_id=cfg.eval.dataset,
@@ -65,7 +80,7 @@ def run_benchmark(cfg: ExperimentConfig, output: Optional[str] = None) -> dict:
             sample_count=cfg.eval.sample_count,
             mode=cfg.eval.mode,
             warmup=cfg.profile.warmup,
-            output=output or str(Path(cfg.eval.output_dir) / f"{cfg.name}.json"),
+            output=result_path,
             enable_prefix_kv_cache=cfg.runtime.enable_prefix_kv_cache,
         )
     if cfg.eval.dataset != "pi05_load_only":

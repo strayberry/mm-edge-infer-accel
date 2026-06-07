@@ -53,6 +53,22 @@ def test_action_mode_validation():
         validate_config(cfg)
 
 
+def test_eval_mode_validation():
+    cfg = load_config("configs/vla/pi05_libero.yaml")
+    cfg.eval.eval_mode = "invalid"
+
+    with pytest.raises(ValueError, match="eval.eval_mode"):
+        validate_config(cfg)
+
+
+def test_episode_length_validation():
+    cfg = load_config("configs/vla/pi05_libero.yaml")
+    cfg.eval.episode_length = 0
+
+    with pytest.raises(ValueError, match="episode_length"):
+        validate_config(cfg)
+
+
 @pytest.mark.parametrize(
     ("section", "field", "value", "message"),
     [

@@ -87,3 +87,50 @@ mm_edge_infer_accel/pi05_optimizations.py
 runtime:
   enable_prefix_kv_cache: false
 ```
+
+## Closed-loop LIBERO 阶段性结果
+
+### 评测口径
+
+本节记录 LeRobot reference closed-loop 评测，不再读取固定 `.npz` 帧，而是直接运行 LIBERO env。
+
+| 项目 | 值 |
+| --- | --- |
+| 日期 | 2026-06-05 |
+| 环境 | `/root/autodl-tmp/envs/pi05` |
+| 模型 | `lerobot/pi05_libero_finetuned_v044` |
+| LIBERO suite | `libero_spatial` |
+| Task ids | `0, 1, 2` |
+| Episodes | 每个 task 3 个，共 9 episodes |
+| Max steps | 280 |
+| Rendering | OSMesa |
+| 对比项 | prefix KV cache on / off |
+
+输出文件：
+
+```text
+outputs/pi05_closed_loop_libero_spatial_tasks0_1_2_ep3_prefix_on.json
+outputs/pi05_closed_loop_libero_spatial_tasks0_1_2_ep3_prefix_off.json
+```
+
+### 汇总结果
+
+| config | success | steps mean | steps std | episode Hz mean | action p50 | action mean | control e2e p50 | env.step p50 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| prefix KV cache on | 9/9 | 134.4 | 60.9 | 2.65 Hz | 4.2 ms | 14.3 ms | 312.9 ms | 303.5 ms |
+| prefix KV cache off | 9/9 | 104.7 | 31.2 | 2.60 Hz | 4.4 ms | 15.8 ms | 308.2 ms | 298.7 ms |
+
+按 task 拆分：
+
+| config | task 0 success / steps | task 1 success / steps | task 2 success / steps |
+| --- | --- | --- | --- |
+| prefix KV cache on | 3/3, `[80, 78, 170]` | 3/3, `[117, 202, 266]` | 3/3, `[95, 101, 101]` |
+| prefix KV cache off | 3/3, `[78, 77, 77]` | 3/3, `[110, 115, 184]` | 3/3, `[102, 96, 103]` |
+
+### 结论
+
+- 本轮 closed-loop 评测中，prefix KV cache on/off 均为 `9/9` success，未观察到成功率退化。
+- prefix KV cache 对 action chunk 推理有小幅收益：action mean 从 `15.8 ms` 降到 `14.3 ms`。
+- 总控制循环主要受 `env.step` 影响，`env.step p50` 约 `300 ms`，因此 prefix KV cache 对整体 control Hz 的影响有限。
+- episode steps 差异较大，尤其 task 0/1；当前不能把 steps 差异直接归因于 prefix KV cache，需要更多 task/seed 扩展验证。
+- 当前 closed-loop 结果可作为 TensorRT/FlashRT 优化前的 LeRobot reference baseline 之一，但还不是完整 LIBERO suite 统计。

@@ -31,10 +31,26 @@ def _vla_metrics() -> list[str]:
     ]
 
 
+def _vla_closed_loop_metrics() -> list[str]:
+    return [
+        "success_rate",
+        "episode_count",
+        "steps",
+        "action_latency",
+        "env_step_latency",
+        "loop_hz",
+        "load_seconds",
+    ]
+
+
 def benchmark_plan(cfg: ExperimentConfig) -> dict:
     if cfg.model.family == "pi05" and cfg.runtime.backend == "lerobot":
-        kind = "pi05_lerobot_action_inference"
-        metrics = _vla_metrics()
+        if cfg.eval.eval_mode == "closed_loop":
+            kind = "pi05_lerobot_closed_loop"
+            metrics = _vla_closed_loop_metrics()
+        else:
+            kind = "pi05_lerobot_action_inference"
+            metrics = _vla_metrics()
     elif cfg.model.family == "pi0_fast":
         kind = "action_prediction_benchmark"
         metrics = _vla_metrics()
