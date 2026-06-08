@@ -8,7 +8,7 @@ such as RTX 3080 Ti and Jetson AGX Orin.
 
 | Track | Scope | Status |
 | --- | --- | --- |
-| Qwen3-VL-4B VLM | vLLM BF16 / AWQ / GPTQ on OCRBench, concurrency curve, latency and memory | Mostly complete |
+| Qwen3-VL-4B VLM | vLLM BF16 / AWQ / GPTQ plus SmoothQuant ablation on OCRBench, concurrency curve, latency and memory | Mostly complete |
 | Pi0.5 LeRobot reference | LIBERO action inference, reset vs queue, prefix KV cache, PyTorch/Nsight profiling | Mostly complete |
 | Pi0.5 FlashRT / Orin | BF16, cache2, INT8, vitpack ablations, 300-frame action similarity | Complete |
 | Pi0.5 closed-loop | LIBERO env success rate, control Hz, episode length, policy/env latency | Current evaluation track |
@@ -42,17 +42,17 @@ configs live under `configs/archive/`.
 
 ## Environments
 
-Use separate environments for normal repo work, vLLM, and TensorRT-LLM side tests.
+Use separate environments for vLLM benchmarks and LLM Compressor quantization exports.
 
 | Purpose | Environment |
 | --- | --- |
 | General tests and Pi0.5 LeRobot runs | `/root/autodl-tmp/envs/pi05` when present |
 | vLLM benchmarks | `/root/autodl-tmp/envs/mm-edge-infer-accel-vllm` |
-| TensorRT-LLM side tests | `/root/autodl-tmp/envs/qwen3vl-trtllm` |
+| Qwen3-VL AWQ/GPTQ/SmoothQuant export | `/root/autodl-tmp/envs/mm-edge-infer-accel-quant` |
 
 The old `/root/miniconda3/envs/mm-edge-infer-accel` environment has been removed. If the Pi0.5
 environment is not present on a host, recreate it before running LeRobot/Pi0.5 commands. Always set
-`VLLM_USE_FLASHINFER_SAMPLER=0` for vLLM processes in this project.
+`VLLM_USE_FLASHINFER_SAMPLER=0` for vLLM processes in this project. The previous `/root/autodl-tmp/envs/qwen3vl-trtllm` side-test environment was removed.
 
 ## CLI
 
@@ -63,7 +63,7 @@ python -m mm_edge_infer_accel.cli <command>   [--config <yaml>]   [--concurrency
 Commands:
 
 - `benchmark`: run an experiment only when `--run` is passed; otherwise print the plan.
-- `quantize`: print the config-driven plan. Use `scripts/quant_qwen3vl4b_llmcompressor.py` for the retained AWQ/GPTQ path.
+- `quantize`: print the config-driven plan. Use `scripts/quant_qwen3vl4b_llmcompressor.py` for the retained AWQ/GPTQ path and the SmoothQuant ablation export.
 - `profile`: generate an `nsys`/`ncu` command string; it does not run the profiler.
 - `env-check`: print local GPU/CUDA/package information.
 
@@ -88,8 +88,8 @@ Current Qwen3-VL-4B constraints and defaults:
 
 - RTX 3080 Ti 12GB uses `max_model_len: 1024` for all 4B comparison runs.
 - `mm_processor_kwargs.truncation: false` and `model.max_pixels: 602112` are required for image token count consistency.
-- Main completed curve: BF16 / AWQ / GPTQ at concurrency `1, 2, 4, 8, 16, 32`.
-- Current deployment-style default: AWQ or GPTQ at `concurrency=8`. BF16 is the quality baseline.
+- Main completed curve: BF16 / AWQ / GPTQ / SmoothQuant at concurrency `1, 2, 4, 8, 16, 32`. SmoothQuant is retained as a W8A8 ablation, not the default deployment path.
+- Current deployment-style default: AWQ or GPTQ at `concurrency=8`. BF16 is the quality baseline; SmoothQuant is not the default because its completed curve does not beat AWQ/GPTQ.
 
 ## Pi0.5 Benchmarks
 
@@ -120,27 +120,27 @@ The prefix KV cache optimization is enabled by default through `runtime.enable_p
 It replaces `model.sample_actions` and caches the visual+text prefix KV cache once, so denoising
 steps only process the action/noise suffix.
 
+## Quantization Export
+
+Qwen3-VL AWQ/GPTQ/SmoothQuant exports use the LLM Compressor environment:
+
+```bash
+conda run --no-capture-output -p /root/autodl-tmp/envs/mm-edge-infer-accel-quant \
+  python scripts/quant_qwen3vl4b_llmcompressor.py --method smoothquant --dry-run
+```
+
+The exported model can then be benchmarked from the vLLM environment with the matching config, for example `configs/vlm/qwen3vl_4b_smoothquant_local.yaml`.
+
 ## TensorRT Side Tests
 
-These scripts are exploratory and are not the main Qwen3-VL project path.
+These scripts are historical/exploratory and are not the main Qwen3-VL project path. The previous local TensorRT-LLM side-test environment was removed; recreate a TensorRT-LLM environment before rerunning them.
 
-Qwen3-VL visual + merger/projector ONNX export:
+- `scripts/export_qwen3vl_vit_projector_onnx.py`
+- `scripts/export_qwen3_0_6b_trtllm_engine.py`
+- `scripts/run_qwen3_0_6b_trtllm_benchmark.py`
+- `scripts/run_qwen3_0_6b_vllm_benchmark.py`
 
-```bash
-conda run --no-capture-output -p /root/autodl-tmp/envs/qwen3vl-trtllm   python scripts/export_qwen3vl_vit_projector_onnx.py --help
-```
-
-Qwen3-0.6B text-only TensorRT-LLM engine side test:
-
-```bash
-conda run --no-capture-output -p /root/autodl-tmp/envs/qwen3vl-trtllm   python scripts/export_qwen3_0_6b_trtllm_engine.py --help
-
-conda run --no-capture-output -p /root/autodl-tmp/envs/qwen3vl-trtllm   python scripts/run_qwen3_0_6b_trtllm_benchmark.py --help
-```
-
-For Qwen3-VL, the retained practical route is vLLM for the decoder plus optional TensorRT for the
-visual+merger/projector module. Full TensorRT-LLM engine backend for Qwen3-VL is not the current
-mainline in this repo.
+For Qwen3-VL, the retained practical route is vLLM for the decoder plus optional TensorRT for the visual+merger/projector module. Full TensorRT-LLM engine backend for Qwen3-VL is not the current mainline in this repo.
 
 ## Profiling
 
@@ -176,7 +176,7 @@ Key reports:
 
 Current takeaways:
 
-- Qwen3-VL-4B on RTX 3080 Ti should use AWQ/GPTQ with vLLM for serving-style runs.
+- Qwen3-VL-4B on RTX 3080 Ti should use AWQ/GPTQ with vLLM for serving-style runs; SmoothQuant is an additional ablation, not yet the default.
 - Qwen3-VL visual TensorRT is useful as a side optimization target, but the decoder remains vLLM in the practical path.
 - Pi0.5 LeRobot reference benefits from prefix KV cache by reducing repeated prefix encoding inside the denoise loop.
 - Pi0.5 FlashRT/Orin `cache2` is the retained runtime optimization; vitpack/token pooling is not retained as a correctness-preserving path.

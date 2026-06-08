@@ -1,6 +1,6 @@
 # Configs
 
-Active configs are kept intentionally small. They define stable model/backend baselines; common experiment variants should be passed through CLI overrides instead of creating new YAML files.
+Active configs are kept intentionally small. They define stable model/backend baselines; common experiment variants should be passed through CLI overrides instead of creating new YAML files. SmoothQuant is included as an additional Qwen3-VL quantization ablation config and should be validated before being treated as a deployment default.
 
 ## Active configs
 
@@ -8,6 +8,7 @@ Active configs are kept intentionally small. They define stable model/backend ba
 vlm/qwen3vl_4b_bf16.yaml
 vlm/qwen3vl_4b_awq_local.yaml
 vlm/qwen3vl_4b_gptq_local.yaml
+vlm/qwen3vl_4b_smoothquant_local.yaml
 vlm/smolvlm2_2b_fp32.yaml
 vla/pi05_libero.yaml
 ```
