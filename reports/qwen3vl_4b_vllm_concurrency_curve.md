@@ -4,7 +4,9 @@
 
 本报告使用 OCRBench `stratified100` 结果分析并发性能曲线。注意：**100 条 stratified 结果只用于观察吞吐和延迟趋势，不用于比较模型准确率**。模型准确率判断应以 1000 条结果为准。
 
-本轮已加入 BF16 baseline。结论变得更明确：BF16 可以作为质量基线，但在 RTX 3080 Ti 12GB 上显存占用明显更高，vLLM 启动后只剩约 `0.21 GiB` KV cache，日志给出的 `Maximum concurrency for 1,024 tokens per request` 只有约 `1.50x`。虽然本数据集仍能跑到高并发，但 c16/c32 主要靠排队消化请求，TTFT 和请求延迟明显放大，不适合作为默认服务形态。
+本轮已加入 BF16 baseline 和 SmoothQuant W8A8。结论变得更明确：BF16 可以作为质量基线，但在 RTX 3080 Ti 12GB 上显存占用明显更高，vLLM 启动后只剩约 `0.21 GiB` KV cache，日志给出的 `Maximum concurrency for 1,024 tokens per request` 只有约 `1.50x`。虽然本数据集仍能跑到高并发，但 c16/c32 主要靠排队消化请求，TTFT 和请求延迟明显放大，不适合作为默认服务形态。
+
+SmoothQuant W8A8 已跑完 `c1/c2/c4/c8/c16/c32`。它可以被当前 vLLM 正常加载，并使用 `compressed-tensors` + CUTLASS INT8 scaled GEMM kernel；但在本轮端到端曲线上，吞吐低于 AWQ/GPTQ，高并发下也没有显著显存优势。因此 SmoothQuant 目前适合作为量化 ablation，不替代 AWQ/GPTQ 默认路线。
 
 如果只能选一个默认值，建议使用：
 
@@ -21,8 +23,9 @@ concurrency = 8
 - 采样方式：`stratified`
 - 样本数：`100`
 - 后端：`vLLM`
-- 模型：Qwen3-VL-4B BF16 baseline / AWQ local / GPTQ local
+- 模型：Qwen3-VL-4B BF16 baseline / AWQ local / GPTQ local / SmoothQuant W8A8 local
 - 并发点：`1, 2, 4, 8, 16, 32`
+- SmoothQuant：已完成 `stratified100, concurrency=1,2,4,8,16,32`
 - `VLLM_USE_FLASHINFER_SAMPLER=0`
 - `runtime.max_model_len: 1024`
 - `model.max_pixels: 602112`
@@ -41,31 +44,34 @@ concurrency = 8
 
 ![请求吞吐曲线](assets/qwen3vl_4b_concurrency_rps.png)
 
-请求吞吐随并发持续上升，到 `c32` 仍未完全饱和。BF16 的吞吐低于 AWQ/GPTQ，尤其在高并发下差距明显。
+请求吞吐随并发持续上升，到 `c32` 仍未完全饱和。BF16 的吞吐低于 AWQ/GPTQ，尤其在高并发下差距明显。SmoothQuant W8A8 的吞吐高于 BF16，但低于 AWQ/GPTQ。
 
-- BF16 baseline：从 c1 的 `1.01 RPS` 提升到 c32 的 `3.38 RPS`。
+- BF16 baseline：从 c1 的 `1.19 RPS` 提升到 c32 的 `3.38 RPS`。
 - AWQ：从 c1 的 `1.01 RPS` 提升到 c32 的 `4.86 RPS`。
 - GPTQ：从 c1 的 `1.02 RPS` 提升到 c32 的 `4.70 RPS`。
+- SmoothQuant W8A8：从 c1 的 `1.04 RPS` 提升到 c32 的 `4.50 RPS`。
 
 ## Token 吞吐曲线
 
 ![Token 吞吐曲线](assets/qwen3vl_4b_concurrency_tokens.png)
 
-生成 token 吞吐同样随并发上升。量化模型的高并发 token 吞吐明显好于 BF16 baseline。
+生成 token 吞吐同样随并发上升。量化模型的高并发 token 吞吐明显好于 BF16 baseline。SmoothQuant W8A8 的 c32 token 吞吐低于 AWQ/GPTQ。
 
 - BF16 baseline：c32 为 `74.26 tok/s`。
 - AWQ：c32 为 `131.70 tok/s`。
 - GPTQ：c32 为 `120.00 tok/s`。
+- SmoothQuant W8A8：c32 为 `107.64 tok/s`。
 
 ## 延迟曲线
 
 ![延迟曲线](assets/qwen3vl_4b_concurrency_latency.png)
 
-并发提高后，吞吐上升，但 P50/P95/TTFT 都会上升。BF16 在 c16/c32 的 TTFT 抬升最明显，说明它在 12GB 单卡上更容易进入排队状态。
+并发提高后，吞吐上升，但 P50/P95/TTFT 都会上升。BF16 在 c16/c32 的 TTFT 抬升最明显，说明它在 12GB 单卡上更容易进入排队状态。SmoothQuant W8A8 的 TTFT 低于 AWQ/GPTQ，但 P50 延迟和吞吐都不是最优。
 
 - BF16 P50 从 c1 的 `258.7 ms` 上升到 c32 的 `8220.2 ms`。
 - AWQ P50 从 c1 的 `249.6 ms` 上升到 c32 的 `5572.3 ms`。
 - GPTQ P50 从 c1 的 `256.3 ms` 上升到 c32 的 `5622.7 ms`。
+- SmoothQuant W8A8 P50 从 c1 的 `266.8 ms` 上升到 c32 的 `6081.0 ms`。
 - BF16 c32 的 TTFT mean 为 `2766.4 ms`，显著高于 AWQ/GPTQ 的约 `676-686 ms`。
 
 ## Stratified100 性能数据
@@ -90,6 +96,56 @@ concurrency = 8
 | GPTQ | 8 | 1.9517 | 48.6216 | 4488.3 | 5077.3 | 304.7 | 0.0 | 0 |
 | GPTQ | 16 | 2.8781 | 72.3152 | 4836.6 | 5552.1 | 460.5 | 0.0 | 0 |
 | GPTQ | 32 | 4.6964 | 119.9990 | 5622.7 | 5625.6 | 676.1 | 0.0 | 0 |
+| SmoothQuant W8A8 | 1 | 1.0442 | 23.8433 | 266.8 | 3843.9 | 149.4 | 0.0 | 0 |
+| SmoothQuant W8A8 | 2 | 1.0871 | 24.8718 | 1178.3 | 4972.0 | 184.3 | 0.0 | 0 |
+| SmoothQuant W8A8 | 4 | 1.3391 | 31.6646 | 3051.9 | 5025.1 | 216.8 | 0.0 | 0 |
+| SmoothQuant W8A8 | 8 | 2.0946 | 48.1667 | 3724.7 | 4810.7 | 264.1 | 0.0 | 0 |
+| SmoothQuant W8A8 | 16 | 2.7934 | 64.1411 | 5194.9 | 5881.6 | 378.8 | 0.0 | 0 |
+| SmoothQuant W8A8 | 32 | 4.4971 | 107.6379 | 6081.0 | 6299.6 | 630.0 | 0.0 | 0 |
+
+## SmoothQuant W8A8 结果
+
+SmoothQuant 使用 LLM Compressor 导出为 `SmoothQuant + W8A8`，校准集为 OCRBench document/text 相关样本：
+
+```text
+conda run --no-capture-output -p /root/autodl-tmp/envs/mm-edge-infer-accel-quant \
+  python scripts/quant_qwen3vl4b_llmcompressor.py \
+  --method smoothquant \
+  --calib-source ocrbench-doc \
+  --max-calib-samples 128 \
+  --max-calib-seq-len 1024 \
+  --calib-max-pixels 602112 \
+  --dtype bfloat16 \
+  --device-map auto
+```
+
+导出结果：
+
+| 项目 | 结果 |
+| --- | ---: |
+| 原始 BF16 模型目录 | `8.3G` |
+| SmoothQuant 模型目录 | `4.9G` |
+| decoder Linear targets | `252` |
+| vLLM quantization backend | `compressed-tensors` |
+| vLLM GEMM kernel | `CutlassInt8ScaledMMLinearKernel for CompressedTensorsW8A8Int8` |
+
+完整 `stratified100` 并发结果如下。注意这仍然不是 1000 条准确率结论，主要用于观察 latency/throughput 曲线。
+
+| 模型 | 并发 | Accuracy | RPS | 生成 tok/s | P50 ms | P95 ms | TTFT mean ms | GPU after load MB | 失败率 | 异常输出 |
+| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| BF16 baseline | 1 | 0.87 | 1.1920 | 25.5066 | 248.6 | 4257.4 | 142.3 | 10413.5 | 0.0 | 0 |
+| AWQ | 1 | 0.85 | 1.0149 | 26.0002 | 249.6 | 4301.1 | 141.4 | 10535.5 | 0.0 | 0 |
+| GPTQ | 1 | 0.90 | 1.0230 | 25.2004 | 256.3 | 4443.9 | 141.7 | 10523.5 | 0.0 | 0 |
+| SmoothQuant W8A8 | 1 | 0.87 | 1.0442 | 23.8433 | 266.8 | 3843.9 | 149.4 | 10393.5 | 0.0 | 0 |
+| SmoothQuant W8A8 | 2 | 0.87 | 1.0871 | 24.8718 | 1178.3 | 4972.0 | 184.3 | 10393.5 | 0.0 | 0 |
+| SmoothQuant W8A8 | 4 | 0.87 | 1.3391 | 31.6646 | 3051.9 | 5025.1 | 216.8 | 10393.5 | 0.0 | 0 |
+| SmoothQuant W8A8 | 8 | 0.87 | 2.0946 | 48.1667 | 3724.7 | 4810.7 | 264.1 | 10393.5 | 0.0 | 0 |
+| SmoothQuant W8A8 | 16 | 0.86 | 2.7934 | 64.1411 | 5194.9 | 5881.6 | 378.8 | 10393.5 | 0.0 | 0 |
+| SmoothQuant W8A8 | 32 | 0.85 | 4.4971 | 107.6379 | 6081.0 | 6299.6 | 630.0 | 10393.5 | 0.0 | 0 |
+
+解读：SmoothQuant W8A8 可以被当前 vLLM 正常加载并使用 CUTLASS INT8 scaled GEMM kernel，功能路径已经跑通。它的 c32 RPS 为 `4.4971`，高于 BF16 的 `3.3756`，但低于 AWQ 的 `4.8580` 和 GPTQ 的 `4.6964`；c32 token 吞吐为 `107.64 tok/s`，也低于 AWQ/GPTQ。显存 after-load 为 `10393.5 MB`，只比 BF16 少约 `20 MB`，明显不符合 checkpoint 从 `8.3G` 降到 `4.9G` 的直觉收益。
+
+这说明当前端到端显存和延迟仍然受 vLLM runtime、vision encoder、KV/encoder cache、输出长度差异等因素影响，不能只从 checkpoint 文件大小推断端到端收益。SmoothQuant 目前保留为 W8A8 ablation；质量判断以 `first1000` 结果为准，不使用 `stratified100` 的 accuracy 波动下结论。
 
 ## 1000 条准确率参考
 
@@ -101,14 +157,37 @@ concurrency = 8
 | AWQ           |    8 |    0.855 | 855/1000 | 3.0367 |   118.1886 |
 | GPTQ          |    4 |    0.854 | 854/1000 | 1.7744 |    67.4203 |
 | GPTQ          |    8 |    0.854 | 854/1000 | 3.0672 |   118.1567 |
+| SmoothQuant W8A8 | 4 | 0.855 | 855/1000 | 1.7936 | 64.1460 |
+| SmoothQuant W8A8 | 8 | 0.858 | 858/1000 | 3.0259 | 109.8004 |
 
-1000 条结果显示，BF16 baseline 的准确率略高于 AWQ/GPTQ，但吞吐和延迟不占优。AWQ/GPTQ 的准确率基本持平，因此 100 条 stratified 结果不应作为模型质量结论依据。
+1000 条结果显示，BF16 baseline 的准确率仍然最高。SmoothQuant W8A8 的准确率为 `0.855/0.858`，略高于 AWQ/GPTQ 的 `0.854/0.855`，但吞吐低于 AWQ/GPTQ；因此 SmoothQuant 的问题不是质量明显下降，而是端到端性能收益不如 AWQ/GPTQ。100 条 stratified 结果不应作为模型质量结论依据。
+
+### Visual+Decoder SmoothQuant ablation
+
+进一步尝试了完整 `visual+decoder` SmoothQuant。实现上新增 `--target-scope visual_decoder`，共量化 `356` 个 Linear target：`104` 个来自 `model.visual` / merger，`252` 个来自 decoder。SmoothQuant smoothing 覆盖 decoder、ViT block 的 `norm1/norm2` 以及 deepstack merger；普通 `visual.merger.norm` 与 `merger.linear_fc1` 维度不匹配，不能做 smoothing，因此 merger Linear 只参与 W8A8 quantization。
+
+导出模型：
+
+```text
+/root/autodl-tmp/models/Qwen3-VL-4B-Instruct-SmoothQuant-VisualDecoder-local
+```
+
+vLLM sanity 结果显示该模型可以用 `compressed-tensors` 加载，并选择 `CutlassInt8ScaledMMLinearKernel for CompressedTensorsW8A8Int8`。`stratified100, concurrency=8` 对比如下：
+
+| config | accuracy | RPS | serving tok/s | P50 latency | TTFT mean | prefill mean | GPU after load |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SmoothQuant decoder-only | 0.87 | 2.0946 | 48.1667 | 3724.7 ms | 264.1 ms | 129.8 ms | 10393.5 MB |
+| SmoothQuant visual+decoder | 0.86 | 2.0076 | 46.0952 | 3750.7 ms | 282.3 ms | 131.6 ms | 10355.5 MB |
+
+结论：完整 visual+decoder W8A8 路径可运行，但在当前 vLLM 端到端 benchmark 中没有超过 decoder-only SmoothQuant。它略降显存 after-load（约 `38 MB`），但 RPS 和 token 吞吐略低，TTFT 略高。当前不建议把 visual+decoder SmoothQuant 作为默认路线，保留为 ablation。
 
 ## 结果解读
 
 BF16 baseline 的价值是作为质量上限和精度参考，不适合作为当前 12GB 单卡的默认部署模型。它在 c32 仍能完成实验，但 TTFT 和 P50 延迟已经明显高于量化模型，说明高并发收益主要来自排队批处理，而不是健康的在线服务延迟。
 
 AWQ/GPTQ 更适合本项目当前的边缘推理部署实验。AWQ 在 c16/c32 的吞吐更好；GPTQ 在 c1-c8 的请求吞吐略好。1000 条准确率参考显示二者质量差距很小，实际选择应优先看吞吐、延迟和部署兼容性。
+
+SmoothQuant W8A8 的工程路径和 first1000 质量都已经验证，但本轮不作为默认部署路线。它的主要价值是证明当前 LLM Compressor `SmoothQuant + W8A8` 导出能够被 vLLM 以 `compressed-tensors` 后端加载；质量接近 AWQ/GPTQ，性能上没有超过 AWQ/GPTQ。
 
 ## 具体建议
 
@@ -118,6 +197,7 @@ AWQ/GPTQ 更适合本项目当前的边缘推理部署实验。AWQ 在 c16/c32 �
 | 低延迟优先 | AWQ/GPTQ，必要时 BF16 | 1-2 | 适合 demo、交互式问答、低请求量场景 |
 | 吞吐优先 | AWQ 优先，其次 GPTQ | 16 | 适合后台批处理或可接受数秒级延迟的服务 |
 | 压测上限 / 曲线右端点 | AWQ/GPTQ | 32 | 吞吐最高，但延迟最高，不建议默认使用 |
+| SmoothQuant ablation | SmoothQuant W8A8 | 8 或 16 | 路径可用，但吞吐低于 AWQ/GPTQ，不作为默认 |
 | 质量基线 | BF16 baseline | 4 或 8 | 用于和量化模型做质量对照，不建议作为 12GB 默认服务模型 |
 
 最终推荐：
@@ -126,6 +206,7 @@ AWQ/GPTQ 更适合本项目当前的边缘推理部署实验。AWQ 在 c16/c32 �
 默认并发: 8
 默认部署模型: AWQ 或 GPTQ
 质量基线: BF16 baseline
+SmoothQuant: ablation，不作为默认部署模型
 低延迟配置: 1 或 2
 吞吐优先配置: 16
 压测上限配置: 32
@@ -156,6 +237,12 @@ outputs/qwen3vl_4b_gptq_vllm_ocrbench_stratified100_c4.json
 outputs/qwen3vl_4b_gptq_vllm_ocrbench_stratified100_c8.json
 outputs/qwen3vl_4b_gptq_vllm_ocrbench_stratified100_c16.json
 outputs/qwen3vl_4b_gptq_vllm_ocrbench_stratified100_c32.json
+outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_stratified100_c1.json
+outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_stratified100_c2.json
+outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_stratified100_c4.json
+outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_stratified100_c8.json
+outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_stratified100_c16.json
+outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_stratified100_c32.json
 ```
 
 准确率参考 JSON：
@@ -167,4 +254,6 @@ outputs/qwen3vl_4b_awq_vllm_ocrbench_first1000_c4.json
 outputs/qwen3vl_4b_awq_vllm_ocrbench_first1000_c8.json
 outputs/qwen3vl_4b_gptq_vllm_ocrbench_first1000_c4.json
 outputs/qwen3vl_4b_gptq_vllm_ocrbench_first1000_c8.json
+outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_first1000_c4.json
+outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_first1000_c8.json
 ```

@@ -14,14 +14,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Quantize Qwen3-VL-4B decoder Linear layers with LLM Compressor."
     )
-    parser.add_argument("--method", choices=("awq", "gptq"), required=True)
+    parser.add_argument("--method", choices=("awq", "gptq", "smoothquant"), required=True)
+    parser.add_argument(
+        "--target-scope",
+        choices=("decoder", "visual_decoder"),
+        default="decoder",
+        help="Quantization target scope. visual_decoder is supported only for SmoothQuant.",
+    )
     parser.add_argument("--source", default=DEFAULT_SOURCE)
     parser.add_argument(
         "--output",
         default=None,
         help=(
             "Output directory. Defaults to "
-            f"{DEFAULT_OUTPUTS['awq']} for AWQ or {DEFAULT_OUTPUTS['gptq']} for GPTQ."
+            f"{DEFAULT_OUTPUTS['awq']} for AWQ, {DEFAULT_OUTPUTS['gptq']} for GPTQ, or "
+            f"{DEFAULT_OUTPUTS['smoothquant']} for SmoothQuant."
         ),
     )
     parser.add_argument("--max-calib-samples", type=int, default=128)
@@ -48,6 +55,7 @@ def main() -> None:
     quantize_qwen3vl4b(
         Qwen3VLLLMCompressorArgs(
             method=args.method,
+            target_scope=args.target_scope,
             source=args.source,
             output=args.output,
             max_calib_samples=args.max_calib_samples,

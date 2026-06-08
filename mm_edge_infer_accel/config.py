@@ -166,9 +166,11 @@ def validate_config(cfg: ExperimentConfig) -> None:
         "awq",
         "gptq",
         "bitsandbytes",
+        "smoothquant",
     }:
         raise ValueError(
-            "vLLM benchmark supports quant.method in: none, awq, gptq, bitsandbytes"
+            "vLLM benchmark supports quant.method in: none, awq, gptq, bitsandbytes, "
+            "smoothquant"
         )
     if cfg.runtime.max_model_len < 1:
         raise ValueError("runtime.max_model_len must be >= 1")

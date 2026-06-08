@@ -92,3 +92,11 @@ def test_speculative_config_validation():
 
     with pytest.raises(ValueError, match="num_speculative_tokens"):
         validate_config(cfg)
+
+
+def test_vllm_accepts_smoothquant_method():
+    cfg = load_config("configs/vlm/qwen3vl_4b_bf16.yaml")
+    cfg.quant.method = "smoothquant"
+    cfg.quant.bits = 8
+
+    validate_config(cfg)

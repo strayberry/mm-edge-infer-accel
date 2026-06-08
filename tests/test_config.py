@@ -24,7 +24,18 @@ def test_load_qwen_config():
 def test_model_type_mapping():
     assert model_type_from_config(load_config("configs/vlm/smolvlm2_2b_fp32.yaml")) == "vlm"
     assert model_type_from_config(load_config("configs/vlm/qwen3vl_4b_gptq_local.yaml")) == "vlm"
+    assert model_type_from_config(load_config("configs/vlm/qwen3vl_4b_smoothquant_local.yaml")) == "vlm"
     assert model_type_from_config(load_config("configs/vla/pi05_libero.yaml")) == "vla"
+
+
+def test_load_qwen3vl_smoothquant_config():
+    cfg = load_config("configs/vlm/qwen3vl_4b_smoothquant_local.yaml")
+
+    assert cfg.name == "qwen3vl_4b_smoothquant_local"
+    assert cfg.model.model_path == "/root/autodl-tmp/models/Qwen3-VL-4B-Instruct-SmoothQuant-local"
+    assert cfg.quant.method == "smoothquant"
+    assert cfg.quant.bits == 8
+    assert cfg.runtime.backend == "vllm"
 
 
 def test_pi05_libero_config_runs_action_inference():

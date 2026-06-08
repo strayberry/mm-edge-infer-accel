@@ -20,7 +20,11 @@ DEFAULT_SOURCE = "/root/autodl-tmp/models/Qwen3-VL-4B-Instruct"
 DEFAULT_OUTPUTS = {
     "awq": "/root/autodl-tmp/models/Qwen3-VL-4B-Instruct-AWQ-local",
     "gptq": "/root/autodl-tmp/models/Qwen3-VL-4B-Instruct-GPTQ-local",
+    "smoothquant": "/root/autodl-tmp/models/Qwen3-VL-4B-Instruct-SmoothQuant-local",
 }
+DEFAULT_VISUAL_DECODER_SMOOTHQUANT_OUTPUT = (
+    "/root/autodl-tmp/models/Qwen3-VL-4B-Instruct-SmoothQuant-VisualDecoder-local"
+)
 
 TARGET_LINEAR_SUFFIXES = (
     "q_proj",
@@ -31,13 +35,16 @@ TARGET_LINEAR_SUFFIXES = (
     "up_proj",
     "down_proj",
 )
+VISUAL_LINEAR_SUFFIXES = ("qkv", "proj", "linear_fc1", "linear_fc2")
 
-QuantMethod = Literal["awq", "gptq"]
+QuantMethod = Literal["awq", "gptq", "smoothquant"]
+QuantTargetScope = Literal["decoder", "visual_decoder"]
 
 
 @dataclass
 class Qwen3VLLLMCompressorArgs:
     method: QuantMethod
+    target_scope: QuantTargetScope = "decoder"
     source: str = DEFAULT_SOURCE
     output: str | None = None
     max_calib_samples: int = 128
@@ -54,6 +61,12 @@ class Qwen3VLLLMCompressorArgs:
 
     @property
     def output_dir(self) -> str:
+        if (
+            self.output is None
+            and self.method == "smoothquant"
+            and self.target_scope == "visual_decoder"
+        ):
+            return DEFAULT_VISUAL_DECODER_SMOOTHQUANT_OUTPUT
         return self.output or DEFAULT_OUTPUTS[self.method]
 
 
@@ -110,8 +123,15 @@ def import_llmcompressor_modifier(method: QuantMethod):
     patch_compressed_tensors_for_llmcompressor()
     try:
         from llmcompressor import oneshot
-    except ImportError:
-        from llmcompressor.transformers import oneshot
+    except ImportError as primary_error:
+        try:
+            from llmcompressor.transformers import oneshot
+        except ImportError:
+            raise RuntimeError(
+                "Failed to import LLM Compressor oneshot(). This usually means the "
+                "installed llmcompressor and compressed-tensors versions are incompatible. "
+                "Check both package versions before running quantization."
+            ) from primary_error
 
     if method == "awq":
         try:
@@ -121,12 +141,21 @@ def import_llmcompressor_modifier(method: QuantMethod):
 
         return oneshot, AWQModifier
 
-    try:
-        from llmcompressor.modifiers.gptq import GPTQModifier
-    except ImportError:
-        from llmcompressor.modifiers.quantization import GPTQModifier
+    if method == "gptq":
+        try:
+            from llmcompressor.modifiers.gptq import GPTQModifier
+        except ImportError:
+            from llmcompressor.modifiers.quantization import GPTQModifier
 
-    return oneshot, GPTQModifier
+        return oneshot, GPTQModifier
+
+    try:
+        from llmcompressor.modifiers.transform.smoothquant import SmoothQuantModifier
+    except ImportError:
+        from llmcompressor.modifiers.smoothquant import SmoothQuantModifier
+    from llmcompressor.modifiers.quantization import QuantizationModifier
+
+    return oneshot, (SmoothQuantModifier, QuantizationModifier)
 
 
 def is_decoder_target(name: str, module: torch.nn.Module) -> bool:
@@ -140,6 +169,27 @@ def is_decoder_target(name: str, module: torch.nn.Module) -> bool:
 
 def collect_decoder_targets(model: torch.nn.Module) -> list[str]:
     return [name for name, module in model.named_modules() if is_decoder_target(name, module)]
+
+
+def is_visual_target(name: str, module: torch.nn.Module) -> bool:
+    if not isinstance(module, torch.nn.Linear):
+        return False
+    return name.startswith("model.visual.") and name.split(".")[-1] in VISUAL_LINEAR_SUFFIXES
+
+
+def collect_visual_targets(model: torch.nn.Module) -> list[str]:
+    return [name for name, module in model.named_modules() if is_visual_target(name, module)]
+
+
+def collect_quantization_targets(
+    model: torch.nn.Module,
+    target_scope: QuantTargetScope,
+) -> list[str]:
+    if target_scope == "decoder":
+        return collect_decoder_targets(model)
+    if target_scope == "visual_decoder":
+        return collect_visual_targets(model) + collect_decoder_targets(model)
+    raise ValueError("target_scope must be one of: decoder, visual_decoder")
 
 
 def build_calibration_dataset(args: Qwen3VLLLMCompressorArgs, processor):
@@ -178,7 +228,11 @@ def build_recipe(
     modifier_cls,
     targets: list[str],
     sequential_targets: str | None,
+    target_scope: QuantTargetScope = "decoder",
 ):
+    if target_scope != "decoder" and method != "smoothquant":
+        raise ValueError("visual_decoder target_scope is currently only supported for SmoothQuant")
+
     if method == "awq":
         kwargs = {}
         if sequential_targets:
@@ -191,12 +245,43 @@ def build_recipe(
                 **kwargs,
             )
         ]
-    return [modifier_cls(targets=targets, scheme="W4A16")]
+    if method == "gptq":
+        return [modifier_cls(targets=targets, scheme="W4A16")]
+
+    smoothquant_cls, quantization_cls = modifier_cls
+    if target_scope == "visual_decoder":
+        mappings = [
+            (["re:.*q_proj", "re:.*k_proj", "re:.*v_proj"], "re:.*input_layernorm"),
+            (["re:.*gate_proj", "re:.*up_proj"], "re:.*post_attention_layernorm"),
+            (
+                [r"re:.*model\.visual\.blocks\..*\.attn\.qkv"],
+                r"re:.*model\.visual\.blocks\..*\.norm1",
+            ),
+            (
+                [r"re:.*model\.visual\.blocks\..*\.mlp\.linear_fc1"],
+                r"re:.*model\.visual\.blocks\..*\.norm2",
+            ),
+            (
+                [r"re:.*model\.visual\.deepstack_merger_list\..*\.linear_fc1"],
+                r"re:.*model\.visual\.deepstack_merger_list\..*\.norm",
+            ),
+        ]
+        return [
+            smoothquant_cls(smoothing_strength=0.5, mappings=mappings),
+            quantization_cls(targets=targets, scheme="W8A8", ignore=["lm_head"]),
+        ]
+
+    return [
+        smoothquant_cls(smoothing_strength=0.5, ignore=["model.visual"]),
+        quantization_cls(targets=targets, scheme="W8A8", ignore=["lm_head", "model.visual"]),
+    ]
 
 
 def quantize_qwen3vl4b(args: Qwen3VLLLMCompressorArgs) -> None:
-    if args.method not in {"awq", "gptq"}:
-        raise ValueError("method must be one of: awq, gptq")
+    if args.method not in {"awq", "gptq", "smoothquant"}:
+        raise ValueError("method must be one of: awq, gptq, smoothquant")
+    if args.target_scope != "decoder" and args.method != "smoothquant":
+        raise ValueError("visual_decoder target_scope is currently only supported for SmoothQuant")
 
     model = AutoModelForImageTextToText.from_pretrained(
         args.source,
@@ -206,7 +291,7 @@ def quantize_qwen3vl4b(args: Qwen3VLLLMCompressorArgs) -> None:
     )
     model.eval()
 
-    targets = collect_decoder_targets(model)
+    targets = collect_quantization_targets(model, args.target_scope)
     processor = AutoProcessor.from_pretrained(
         args.source,
         trust_remote_code=True,
@@ -214,11 +299,17 @@ def quantize_qwen3vl4b(args: Qwen3VLLLMCompressorArgs) -> None:
     )
     calib_data, data_collator, text_column = build_calibration_dataset(args, processor)
 
-    scheme = "W4A16_ASYM AWQ" if args.method == "awq" else "W4A16 GPTQ"
+    scheme_by_method = {
+        "awq": "W4A16_ASYM AWQ",
+        "gptq": "W4A16 GPTQ",
+        "smoothquant": "SmoothQuant + W8A8",
+    }
+    scheme = scheme_by_method[args.method]
     print("source:", args.source)
     print("output:", args.output_dir)
     print("dtype:", args.dtype)
     print("method:", args.method)
+    print("target_scope:", args.target_scope)
     print("scheme:", scheme)
     print("calib_source:", args.calib_source)
     print("calib_max_pixels:", args.calib_max_pixels)
@@ -230,7 +321,13 @@ def quantize_qwen3vl4b(args: Qwen3VLLLMCompressorArgs) -> None:
         return
 
     oneshot, modifier_cls = import_llmcompressor_modifier(args.method)
-    recipe = build_recipe(args.method, modifier_cls, targets, args.sequential_targets)
+    recipe = build_recipe(
+        args.method,
+        modifier_cls,
+        targets,
+        args.sequential_targets,
+        target_scope=args.target_scope,
+    )
     kwargs = {}
     if text_column is not None:
         kwargs["text_column"] = text_column
