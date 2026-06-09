@@ -8,6 +8,8 @@
 
 SmoothQuant W8A8 已跑完 `c1/c2/c4/c8/c16/c32`。它可以被当前 vLLM 正常加载，并使用 `compressed-tensors` + CUTLASS INT8 scaled GEMM kernel；但在本轮端到端曲线上，吞吐低于 AWQ/GPTQ，高并发下也没有显著显存优势。因此 SmoothQuant 目前适合作为量化 ablation，不替代 AWQ/GPTQ 默认路线。
 
+另外补充验证了 AWQ/GPTQ `compressed-tensors` W4A16 在 `enforce_eager=false` 下的 compiled/CUDA Graph 路径。该路径吞吐明显提高，但 `stratified100` accuracy 从 eager 路径的约 `0.83/0.84` 降到 `0.74/0.75`，且 c1 与 c8 掉点一致。当前判断这是 compiled 路径与 W4A16 quant/dequant/norm kernel 组合的数值稳定问题，不是并发调度问题。因此 `enforce_eager=false` 只保留为速度 ablation，不作为默认部署路线。
+
 如果只能选一个默认值，建议使用：
 
 ```text
@@ -26,6 +28,7 @@ concurrency = 8
 - 模型：Qwen3-VL-4B BF16 baseline / AWQ local / GPTQ local / SmoothQuant W8A8 local
 - 并发点：`1, 2, 4, 8, 16, 32`
 - SmoothQuant：已完成 `stratified100, concurrency=1,2,4,8,16,32`
+- W4A16 compiled ablation：AWQ `c1/c8` 和 GPTQ `c8`，对比 `enforce_eager=true/false`
 - `VLLM_USE_FLASHINFER_SAMPLER=0`
 - `runtime.max_model_len: 1024`
 - `model.max_pixels: 602112`
@@ -181,6 +184,63 @@ vLLM sanity 结果显示该模型可以用 `compressed-tensors` 加载，并选�
 
 结论：完整 visual+decoder W8A8 路径可运行，但在当前 vLLM 端到端 benchmark 中没有超过 decoder-only SmoothQuant。它略降显存 after-load（约 `38 MB`），但 RPS 和 token 吞吐略低，TTFT 略高。当前不建议把 visual+decoder SmoothQuant 作为默认路线，保留为 ablation。
 
+### W4A16 compiled path ablation
+
+进一步测试了 AWQ/GPTQ `compressed-tensors` W4A16 在 `enforce_eager=false` 下的 vLLM compiled/CUDA Graph 路径。该实验使用重新导出的本地 AWQ/GPTQ 权重：
+
+```text
+/root/autodl-tmp/models/Qwen3-VL-4B-Instruct-AWQ-local
+/root/autodl-tmp/models/Qwen3-VL-4B-Instruct-GPTQ-local
+```
+
+需要注意，早期 `AWQ=0.85`、`GPTQ=0.90` 的 JSON 虽然记录了同一路径，但本地模型目录后来被清理并重新导出，因此旧 JSON 与本段新实验不是同一份权重。为避免混淆，本段只比较同一份新权重在 eager 与 compiled 两条 runtime 路径下的差异。
+
+| config | accuracy | RPS | P50 latency | generated tokens mean | TTFT mean | prefill mean | decode mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| AWQ c1 eager | 0.83 | 1.09 | 278.8 ms | 22.25 | 147.1 ms | 103.3 ms | 751.1 ms |
+| AWQ c1 compiled | 0.74 | 3.80 | 98.1 ms | 28.21 | 105.4 ms | 60.5 ms | 140.3 ms |
+| AWQ c8 eager | 0.83 | 2.05 | 4428.9 ms | 21.98 | 331.3 ms | 173.2 ms | 790.2 ms |
+| AWQ c8 compiled | 0.74 | 6.33 | 1080.9 ms | 28.23 | 311.7 ms | 174.2 ms | 224.2 ms |
+| GPTQ c8 eager | 0.84 | 2.11 | 3844.5 ms | 21.99 | 328.2 ms | 169.1 ms | 730.4 ms |
+| GPTQ c8 compiled | 0.75 | 6.21 | 1048.6 ms | 27.79 | 324.5 ms | 165.3 ms | 212.5 ms |
+
+日志显示两条路径并不是“同一模型的纯加速执行”：
+
+```text
+eager=true:
+  disables torch.compile and CUDA Graphs
+  pass_config: fuse_norm_quant=True, fuse_act_quant=True
+  rms_norm priority: ['vllm_c', 'native']
+
+eager=false:
+  enables torch.compile and CUDA Graphs
+  pass_config: fuse_norm_quant=False, fuse_act_quant=False
+  rms_norm priority: ['native']
+```
+
+AWQ 在 c1 和 c8 下都从 `0.83` 降到 `0.74`，且错样本分布一致，因此掉点不是由并发调度或 batching 引起，而是 compiled runtime 路径本身导致。对比样本显示，compiled 路径主要在字符级 OCR、数字串和公式识别上出现小幅 token 漂移：
+
+| 题型 | eager 正确但 compiled 错误 |
+| --- | ---: |
+| Non-Semantic Text Recognition | 4 / 10 |
+| Digit String Recognition | 3 / 10 |
+| Handwritten Mathematical Expression Recognition | 3 / 10 |
+| Artistic Text Recognition | 1 / 10 |
+| Doc-oriented VQA | 1 / 10 |
+| Regular Text Recognition | 1 / 10 |
+| Scene Text-centric VQA | 1 / 10 |
+
+典型错误包括：
+
+| answer | eager output | compiled output |
+| --- | --- | --- |
+| `marilyn` | `marilyn` | `marilylyn` |
+| `1056` | `1056` | `10556` |
+| `x_1 = (-2 + 2 sqrt(2)) / 2` | denominator `2` | denominator `1` |
+| `caiognr` | `caiognr` | `caioognr` |
+
+结论：`enforce_eager=false` 对 W4A16 模型有真实速度收益，但当前 vLLM compiled/CUDA Graph 路径对 Qwen3-VL OCRBench 的字符级输出不够稳定。该路径只作为 high-throughput ablation，不作为默认部署配置。后续如继续追这条路线，需要暴露更细的 vLLM `compilation_config`，分别测试“保留 compile 但关闭 CUDA Graph”、quant fusion 配置、以及更完整的 first1000 accuracy。
+
 ## 结果解读
 
 BF16 baseline 的价值是作为质量上限和精度参考，不适合作为当前 12GB 单卡的默认部署模型。它在 c32 仍能完成实验，但 TTFT 和 P50 延迟已经明显高于量化模型，说明高并发收益主要来自排队批处理，而不是健康的在线服务延迟。
@@ -188,6 +248,8 @@ BF16 baseline 的价值是作为质量上限和精度参考，不适合作为当
 AWQ/GPTQ 更适合本项目当前的边缘推理部署实验。AWQ 在 c16/c32 的吞吐更好；GPTQ 在 c1-c8 的请求吞吐略好。1000 条准确率参考显示二者质量差距很小，实际选择应优先看吞吐、延迟和部署兼容性。
 
 SmoothQuant W8A8 的工程路径和 first1000 质量都已经验证，但本轮不作为默认部署路线。它的主要价值是证明当前 LLM Compressor `SmoothQuant + W8A8` 导出能够被 vLLM 以 `compressed-tensors` 后端加载；质量接近 AWQ/GPTQ，性能上没有超过 AWQ/GPTQ。
+
+`enforce_eager=false` 的 W4A16 compiled 路径不进入默认路线。虽然它能把 AWQ/GPTQ c8 RPS 提升到约 `6.2-6.3`，但同一份权重 accuracy 从 `0.83/0.84` 降到 `0.74/0.75`。在 OCR/数字/公式场景中，这类小数值差异会被字符级评测放大，因此主线仍以 `enforce_eager=true` 结果为准。
 
 ## 具体建议
 
@@ -198,6 +260,7 @@ SmoothQuant W8A8 的工程路径和 first1000 质量都已经验证，但本轮�
 | 吞吐优先 | AWQ 优先，其次 GPTQ | 16 | 适合后台批处理或可接受数秒级延迟的服务 |
 | 压测上限 / 曲线右端点 | AWQ/GPTQ | 32 | 吞吐最高，但延迟最高，不建议默认使用 |
 | SmoothQuant ablation | SmoothQuant W8A8 | 8 或 16 | 路径可用，但吞吐低于 AWQ/GPTQ，不作为默认 |
+| W4A16 compiled ablation | AWQ/GPTQ + `enforce_eager=false` | 1 或 8 | 速度快但准确率下降，不作为默认 |
 | 质量基线 | BF16 baseline | 4 或 8 | 用于和量化模型做质量对照，不建议作为 12GB 默认服务模型 |
 
 最终推荐：
@@ -207,6 +270,7 @@ SmoothQuant W8A8 的工程路径和 first1000 质量都已经验证，但本轮�
 默认部署模型: AWQ 或 GPTQ
 质量基线: BF16 baseline
 SmoothQuant: ablation，不作为默认部署模型
+W4A16 compiled path: ablation，不作为默认部署模型
 低延迟配置: 1 或 2
 吞吐优先配置: 16
 压测上限配置: 32
@@ -243,6 +307,12 @@ outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_stratified100_c4.json
 outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_stratified100_c8.json
 outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_stratified100_c16.json
 outputs/qwen3vl_4b_smoothquant_vllm_ocrbench_stratified100_c32.json
+outputs/qwen3vl_4b_awq_vllm_ocrbench_stratified100_c1_eager_rerun.json
+outputs/qwen3vl_4b_awq_vllm_ocrbench_stratified100_c1_optimized.json
+outputs/qwen3vl_4b_awq_vllm_ocrbench_stratified100_c8_eager_rerun.json
+outputs/qwen3vl_4b_awq_vllm_ocrbench_stratified100_c8_optimized.json
+outputs/qwen3vl_4b_gptq_vllm_ocrbench_stratified100_c8_eager_rerun.json
+outputs/qwen3vl_4b_gptq_vllm_ocrbench_stratified100_c8_optimized.json
 ```
 
 准确率参考 JSON：
